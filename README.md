@@ -219,6 +219,7 @@ flowchart LR
 ```
 streamops-agent/
   java/
+    flink-parent/             # Shared Flink dependency management (Maven parent POM)
     proto/                    # Protobuf schema (StreamEvent)
     event-simulator/          # Standalone Kafka producer, 6 anomaly scenarios
     stream-processor/         # Flink 2.0 job (MetricAggregator + AnomalyDetector)
@@ -236,21 +237,23 @@ streamops-agent/
     tests/                    # 53 Python tests
   config/
     prometheus.yml            # Scrape config for Flink JM + TM metrics
-    grafana/
-      provisioning/
-        datasources/          # Auto-provisions Prometheus datasource
-        dashboards/           # Flink Overview dashboard (auto-loaded)
-  docker-compose.yml          # Kafka KRaft, Flink JM+TM, Prometheus, Grafana, Kafka UI
+    grafana/provisioning/
+      datasources/            # Auto-provisions Prometheus datasource
+      dashboards/             # Flink Overview dashboard (auto-loaded)
+  docs/images/                # Screenshots for README
+  scripts/                    # Demo scenario runner
+  .github/workflows/          # CI pipeline (test, lint, build)
+  docker-compose.yml          # Kafka KRaft, Flink JM+TM, Kafka UI, Prometheus, Grafana
 ```
 
 ## Test Coverage
 
 | Module | Tests | Framework |
 |--------|-------|-----------|
-| Event Simulator | 20 | JUnit 5, AssertJ |
+| Event Simulator | 23 | JUnit 5, AssertJ |
 | Stream Processor | 14 | JUnit 5, AssertJ, Mockito |
 | MCP Server + Agent | 53 | pytest |
-| **Total** | **87** | |
+| **Total** | **90** | |
 
 ## Quick Start
 
