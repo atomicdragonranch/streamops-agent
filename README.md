@@ -309,7 +309,7 @@ uv run python -m streamops_mcp.agent.main --single-cycle
 uv run python -m streamops_mcp.agent.main
 ```
 
-The monitor interval is configurable via `STREAMOPS_AGENT_MONITOR_INTERVAL` (seconds).
+All Python config has sensible defaults in `config.py` and can be overridden with `STREAMOPS_`-prefixed environment variables (e.g., `STREAMOPS_AGENT_MONITOR_INTERVAL=30`, `STREAMOPS_KAFKA_BOOTSTRAP=kafka:29092`). Java config works the same way: defaults in `application.properties`, overridden by env vars like `KAFKA_BOOTSTRAP`.
 
 ### Web Dashboards
 
