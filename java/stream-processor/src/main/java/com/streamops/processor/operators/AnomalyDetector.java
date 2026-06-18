@@ -10,6 +10,8 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Properties;
+
 /**
  * Stateful anomaly detection using Flink keyed state. Tracks per-component
  * running statistics and fires alerts when values exceed thresholds.
@@ -17,6 +19,9 @@ import org.slf4j.LoggerFactory;
  * Uses ValueState to maintain running averages per component/metric pair.
  * When a new metric deviates significantly from the running average, an alert
  * is emitted to the alert topic for the AI agent to investigate.
+ *
+ * All thresholds are loaded from application.properties, passed in via constructor.
+ * Override per-environment using env vars or properties file swap.
  *
  * Thresholds are intentionally simple (static multipliers) because the real
  * intelligence lives in the AI agent layer, not here. This detector catches
@@ -26,16 +31,39 @@ public class AnomalyDetector extends KeyedProcessFunction<String, StreamEvent, S
 
     private static final Logger LOG = LoggerFactory.getLogger(AnomalyDetector.class);
 
-    private static final double LATENCY_THRESHOLD_MS = 200.0;
-    private static final double BACKPRESSURE_THRESHOLD = 0.5;
-    private static final double CHECKPOINT_THRESHOLD_MS = 30000.0;
-    private static final double ERROR_RATE_THRESHOLD = 0.2;
-    private static final double HEAP_THRESHOLD_PERCENT = 85.0;
-    private static final double CONSUMER_LAG_THRESHOLD = 10000.0;
+    private final double latencyThresholdMs;
+    private final double backpressureThreshold;
+    private final double checkpointThresholdMs;
+    private final double errorRateThreshold;
+    private final double heapThresholdPercent;
+    private final double consumerLagThreshold;
+    private final double emaAlpha;
+    private final long errorRateMinEvents;
+    private final int logSeverityThreshold;
 
     private transient ValueState<Double> runningAvgState;
     private transient ValueState<Long> eventCountState;
     private transient ValueState<Long> errorCountState;
+
+    public AnomalyDetector() {
+        this(new Properties());
+    }
+
+    public AnomalyDetector(Properties config) {
+        this.latencyThresholdMs = doubleProp(config, "anomaly.latency.threshold.ms", 200.0);
+        this.backpressureThreshold = doubleProp(config, "anomaly.backpressure.threshold", 0.5);
+        this.checkpointThresholdMs = doubleProp(config, "anomaly.checkpoint.threshold.ms", 30000.0);
+        this.errorRateThreshold = doubleProp(config, "anomaly.error.rate.threshold", 0.2);
+        this.heapThresholdPercent = doubleProp(config, "anomaly.heap.threshold.percent", 85.0);
+        this.consumerLagThreshold = doubleProp(config, "anomaly.consumer.lag.threshold", 10000.0);
+        this.emaAlpha = doubleProp(config, "anomaly.ema.alpha", 0.1);
+        this.errorRateMinEvents = Long.parseLong(config.getProperty("anomaly.error.rate.min.events", "10"));
+        this.logSeverityThreshold = Integer.parseInt(config.getProperty("anomaly.log.severity.threshold", "3"));
+    }
+
+    private static double doubleProp(Properties config, String key, double defaultValue) {
+        return Double.parseDouble(config.getProperty(key, String.valueOf(defaultValue)));
+    }
 
     @Override
     public void open(OpenContext openContext) {
@@ -46,8 +74,10 @@ public class AnomalyDetector extends KeyedProcessFunction<String, StreamEvent, S
         errorCountState = getRuntimeContext().getState(
             new ValueStateDescriptor<>("error-count", Types.LONG));
 
-        LOG.info("AnomalyDetector initialized with thresholds: latency={}ms, backpressure={}, checkpoint={}ms",
-            LATENCY_THRESHOLD_MS, BACKPRESSURE_THRESHOLD, CHECKPOINT_THRESHOLD_MS);
+        LOG.info("AnomalyDetector initialized: latency={}ms, backpressure={}, checkpoint={}ms, "
+                + "errorRate={}, heap={}%, consumerLag={}, emaAlpha={}",
+            latencyThresholdMs, backpressureThreshold, checkpointThresholdMs,
+            errorRateThreshold, heapThresholdPercent, consumerLagThreshold, emaAlpha);
     }
 
     @Override
@@ -73,8 +103,7 @@ public class AnomalyDetector extends KeyedProcessFunction<String, StreamEvent, S
             return;
         }
 
-        // Exponential moving average (alpha=0.1) to smooth out noise
-        double newAvg = runningAvg * 0.9 + value * 0.1;
+        double newAvg = runningAvg * (1.0 - emaAlpha) + value * emaAlpha;
         runningAvgState.update(newAvg);
         eventCountState.update(count + 1);
 
@@ -96,34 +125,34 @@ public class AnomalyDetector extends KeyedProcessFunction<String, StreamEvent, S
         eventCountState.update(total);
 
         int severity = event.getLog().getSeverityValue();
-        if (severity >= 3) { // WARN or above
+        if (severity >= logSeverityThreshold) {
             errors++;
             errorCountState.update(errors);
         }
 
-        if (total > 10) {
+        if (total > errorRateMinEvents) {
             double errorRate = (double) errors / total;
-            if (errorRate > ERROR_RATE_THRESHOLD) {
+            if (errorRate > errorRateThreshold) {
                 LOG.info("Error rate anomaly: component={}, rate={}, errors={}/{}",
                     event.getSource(), errorRate, errors, total);
                 out.collect(buildAlert("error_rate_high", event.getSource(),
-                    ERROR_RATE_THRESHOLD, errorRate, event.getTimestampMs()));
+                    errorRateThreshold, errorRate, event.getTimestampMs()));
             }
         }
     }
 
     private String checkThresholds(String metricName, double value, double avg, String component, long timestampMs) {
         return switch (metricName) {
-            case "latency_ms" -> value > LATENCY_THRESHOLD_MS
-                ? buildAlert("latency_spike", component, LATENCY_THRESHOLD_MS, value, timestampMs) : null;
-            case "backpressure_ratio" -> value > BACKPRESSURE_THRESHOLD
-                ? buildAlert("backpressure_high", component, BACKPRESSURE_THRESHOLD, value, timestampMs) : null;
-            case "checkpoint_duration_ms" -> value > CHECKPOINT_THRESHOLD_MS
-                ? buildAlert("checkpoint_slow", component, CHECKPOINT_THRESHOLD_MS, value, timestampMs) : null;
-            case "heap_usage_percent" -> value > HEAP_THRESHOLD_PERCENT
-                ? buildAlert("memory_pressure", component, HEAP_THRESHOLD_PERCENT, value, timestampMs) : null;
-            case "consumer_lag" -> value > CONSUMER_LAG_THRESHOLD
-                ? buildAlert("consumer_lag_high", component, CONSUMER_LAG_THRESHOLD, value, timestampMs) : null;
+            case "latency_ms" -> value > latencyThresholdMs
+                ? buildAlert("latency_spike", component, latencyThresholdMs, value, timestampMs) : null;
+            case "backpressure_ratio" -> value > backpressureThreshold
+                ? buildAlert("backpressure_high", component, backpressureThreshold, value, timestampMs) : null;
+            case "checkpoint_duration_ms" -> value > checkpointThresholdMs
+                ? buildAlert("checkpoint_slow", component, checkpointThresholdMs, value, timestampMs) : null;
+            case "heap_usage_percent" -> value > heapThresholdPercent
+                ? buildAlert("memory_pressure", component, heapThresholdPercent, value, timestampMs) : null;
+            case "consumer_lag" -> value > consumerLagThreshold
+                ? buildAlert("consumer_lag_high", component, consumerLagThreshold, value, timestampMs) : null;
             default -> null;
         };
     }
