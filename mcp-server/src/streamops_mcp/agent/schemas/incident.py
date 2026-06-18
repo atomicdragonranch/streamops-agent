@@ -3,8 +3,6 @@
 The Report Agent receives a DiagnosisReport and produces an IncidentReport
 with severity classification and recommended actions. This is what gets
 routed through the escalation logic.
-
-Cert ref: Domain 1 (structured output constraining agent response format).
 """
 
 from enum import Enum

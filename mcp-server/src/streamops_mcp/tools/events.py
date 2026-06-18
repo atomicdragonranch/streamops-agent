@@ -9,8 +9,7 @@ import json
 import logging
 from typing import Optional
 
-from confluent_kafka import Consumer, TopicPartition, OFFSET_END
-from google.protobuf.json_format import MessageToDict
+from confluent_kafka import Consumer, TopicPartition
 from mcp.server.fastmcp import FastMCP
 
 from streamops_mcp.config import config

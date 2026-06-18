@@ -7,9 +7,8 @@ The loop is driven by Claude's stop_reason:
   - "tool_use": Claude wants to call a tool, keep going
   - "end_turn": Claude is done, check if there's an incident to report
 
-Cert ref: Domain 1 (agentic loop, tool use, coordinator pattern).
-Cert ref: Domain 1.3 (sub-agent invocation, context injection, conflict escalation).
-Cert ref: Domain 1.7 (session state: sub-agents start blank, coordinator injects all context).
+Sub-agents start blank; the coordinator injects all context via structured
+prompts to maintain session isolation.
 """
 
 import json
@@ -118,9 +117,6 @@ class MonitorAgent:
         """Run the agentic loop to poll infrastructure and detect anomalies.
 
         Returns the assistant's final text if anomalies were found, None if healthy.
-
-        Cert ref: Domain 1 (agentic loop driven by stop_reason; tool_use = continue,
-        end_turn = done).
         """
         messages = [{"role": "user", "content": "Run a health check on the streaming infrastructure. Check Flink jobs, consumer lag, and recent events. Report any anomalies you find."}]
 
@@ -181,9 +177,6 @@ class MonitorAgent:
         The sub-agent starts with a blank context. All relevant information
         must be injected explicitly via the prompt (not inherited from the
         coordinator's conversation history).
-
-        Cert ref: Domain 1.3 (sub-agent starts blank, structured context injection).
-        Cert ref: Domain 1.7 (context isolation between coordinator and sub-agents).
         """
         logger.info("Spawning Diagnostic Agent")
 
@@ -245,8 +238,6 @@ Use the available tools to determine the root cause. Respond with a JSON object 
         No tools needed; the Report agent synthesizes from the diagnosis.
         The full DiagnosisReport (including sources, claims, and conflicts)
         is passed as structured JSON, preserving attribution end-to-end.
-
-        Cert ref: Domain 1.3 (structured context passing with claim-source attribution).
         """
         logger.info("Spawning Report Agent")
 

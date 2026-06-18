@@ -9,7 +9,6 @@ Keeping tool definitions separate from execution lets us:
 2. Scope which tools each sub-agent can access (Diagnostic vs Report)
 3. Generate the definitions from the MCP tool registry if needed later
 
-Cert ref: Domain 1 (tool definitions for Claude API tool_use).
 Scoping tools per sub-agent role (DIAGNOSTIC_TOOLS vs REPORT_TOOLS)
 limits each agent's capabilities to its responsibilities.
 """

@@ -363,19 +363,17 @@ Another application is using the Grafana port. Edit `docker-compose.yml` and cha
 
 This is normal during warm-up. The AnomalyDetector uses exponential moving averages (EMA) that need several data points before triggering. Run the simulator for at least 30 seconds with an anomaly scenario, then check the `stream-alerts` topic in Kafka UI.
 
-## Cert Reference
+## Architectural Patterns
 
-This project demonstrates patterns from the Claude Certified Architect exam:
-
-| Pattern | Domain | Implementation |
-|---------|--------|----------------|
-| Agentic loop (stop_reason driven) | 1 | `monitor.py:_detect_anomalies()` |
-| Tool use (MCP tools) | 1 | `executor.py`, `tools.py` |
-| Structured output (Pydantic) | 1 | `schemas/diagnosis.py`, `schemas/incident.py` |
-| Multi-agent coordinator | 1 | `monitor.py:MonitorAgent` |
-| Sub-agent context injection | 1.3 | `monitor.py:_spawn_diagnostic_agent()` |
-| Claim-source attribution | 1.3 | `schemas/diagnosis.py:ClaimRecord + SourceRecord` |
-| Conflict annotation + escalation | 1.3 | `schemas/diagnosis.py:ConflictRecord` |
-| Session isolation (blank sub-agents) | 1.7 | `monitor.py:_spawn_*_agent()` |
-| Human-in-the-loop | 1 | `escalation.py:_handle_critical()` |
-| Config externalization | -- | `config.py`, `application.properties` |
+| Pattern | Implementation |
+|---------|----------------|
+| Agentic loop (stop_reason driven) | `monitor.py:_detect_anomalies()` |
+| Tool use (MCP tools) | `executor.py`, `tools.py` |
+| Structured output (Pydantic) | `schemas/diagnosis.py`, `schemas/incident.py` |
+| Multi-agent coordinator (hub-and-spoke) | `monitor.py:MonitorAgent` |
+| Sub-agent context injection | `monitor.py:_spawn_diagnostic_agent()` |
+| Claim-source attribution | `schemas/diagnosis.py:ClaimRecord + SourceRecord` |
+| Conflict annotation + escalation | `schemas/diagnosis.py:ConflictRecord` |
+| Session isolation (blank sub-agents) | `monitor.py:_spawn_*_agent()` |
+| Human-in-the-loop | `escalation.py:_handle_critical()` |
+| Config externalization | `config.py`, `application.properties` |

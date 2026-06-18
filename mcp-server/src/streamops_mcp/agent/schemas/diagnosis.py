@@ -1,12 +1,8 @@
 """Structured output schema for the Diagnostic Agent.
 
-This Pydantic model constrains Claude's output when investigating an anomaly.
-The agent must produce a structured diagnosis, not free-form text. This is
-the "structured output" pattern from the Claude API: pass the JSON schema
-in the tool definition, and the model is forced to conform to it.
-
-Cert ref: Domain 1 (structured output), Domain 1.3 (claim-source attribution,
-conflict handling in multi-agent pipelines).
+Pydantic model constraining Claude's output when investigating an anomaly.
+The agent must produce a structured diagnosis with claim-source attribution,
+not free-form text.
 """
 
 from pydantic import BaseModel, Field
@@ -19,7 +15,6 @@ class SourceRecord(BaseModel):
     unique source_id. Claims reference these IDs so any finding can be traced
     back to the tool and data that produced it.
 
-    Cert ref: Domain 1.3 (attribution preservation across sub-agents).
     """
 
     source_id: str = Field(description="Unique identifier for this source (e.g., 'src-001')")
@@ -35,7 +30,6 @@ class ClaimRecord(BaseModel):
     the source_id that produced it. Downstream agents (and humans) can
     verify any claim back to its origin without re-running tools.
 
-    Cert ref: Domain 1.3 (claim-source mappings for sub-agent context passing).
     """
 
     claim_id: str = Field(description="Unique identifier for this claim (e.g., 'C01')")
@@ -51,7 +45,6 @@ class ConflictRecord(BaseModel):
     annotate both claims, mark the conflict as unresolved, and escalate
     to the coordinator. Sub-agents must never silently resolve conflicts.
 
-    Cert ref: Domain 1.3 (conflict handling, escalation to coordinator).
     """
 
     conflict_id: str = Field(description="Unique identifier (e.g., 'conf-001')")
@@ -97,8 +90,6 @@ class DiagnosisReport(BaseModel):
     with sources for full attribution traceability, and any conflicting data
     is annotated for coordinator review.
 
-    Cert ref: Domain 1 (structured output), Domain 1.3 (claim-source mappings,
-    conflict escalation).
     """
 
     anomaly_type: str = Field(description="Category: latency_spike, throughput_drop, backpressure, checkpoint_failure, memory_pressure, error_burst")

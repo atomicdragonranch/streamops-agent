@@ -9,16 +9,11 @@ import logging
 from typing import Optional
 
 from confluent_kafka import Consumer, TopicPartition
-from confluent_kafka.admin import AdminClient
 from mcp.server.fastmcp import FastMCP
 
 from streamops_mcp.config import config
 
 logger = logging.getLogger("streamops-mcp.kafka")
-
-
-def _create_admin() -> AdminClient:
-    return AdminClient({"bootstrap.servers": config.kafka_bootstrap})
 
 
 def register_kafka_tools(mcp: FastMCP):

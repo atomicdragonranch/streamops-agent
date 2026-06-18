@@ -41,7 +41,7 @@ monitoring/grafana/data/
 .DS_Store
 Thumbs.db
 
-# Claude working artifacts (local only)
+# Working artifacts (local only)
 claude-artifacts/
 
 # Demo output (live runs only; examples/ is tracked)

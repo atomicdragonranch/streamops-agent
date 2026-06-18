@@ -11,9 +11,6 @@ directly, without needing the generated Python classes.
 
 import logging
 
-from google.protobuf.descriptor_pool import DescriptorPool
-from google.protobuf.descriptor import FieldDescriptor
-
 logger = logging.getLogger("streamops-mcp.proto")
 
 
@@ -24,10 +21,6 @@ def deserialize_stream_event(raw: bytes) -> dict | None:
     classes. The schema is simple enough that descriptor-less decoding works.
     """
     try:
-        from google.protobuf.json_format import MessageToDict
-        from google.protobuf import descriptor_pb2
-        from google.protobuf.internal.decoder import _DecodeVarint
-
         result = _decode_raw(raw)
         return result if result else None
     except Exception as e:

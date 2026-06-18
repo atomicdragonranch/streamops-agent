@@ -151,8 +151,8 @@ public class EventSimulator {
         long sent = eventCount.get();
         long errors = errorCount.get();
         if (errors > 0) {
-            LOG.warn("Progress: sent={}, errors={}, error_rate={:.2f}%",
-                sent, errors, (errors * 100.0) / Math.max(1, sent + errors));
+            LOG.warn("Progress: sent={}, errors={}, error_rate={}%",
+                sent, errors, String.format("%.2f", (errors * 100.0) / Math.max(1, sent + errors)));
         } else {
             LOG.info("Progress: sent={}", sent);
         }

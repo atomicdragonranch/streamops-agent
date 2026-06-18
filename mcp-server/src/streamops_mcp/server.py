@@ -6,8 +6,7 @@ can call to diagnose pipeline issues. Each tool queries a different backend
 
 Why MCP instead of direct API calls: the agent doesn't need to know endpoint
 URLs, auth details, or query syntax. It calls `query_flink_jobs()` and gets
-back structured job state. This abstraction layer is what the Claude Certified
-Architect exam calls "tool use" in agentic architectures.
+back structured job state.
 """
 
 import logging
