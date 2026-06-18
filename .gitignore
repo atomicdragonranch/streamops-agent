@@ -1,0 +1,49 @@
+# Java / Maven
+java/**/target/
+*.class
+*.jar
+*.war
+*.ear
+dependency-reduced-pom.xml
+
+# Python
+python/__pycache__/
+python/**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+dist/
+build/
+
+# Node / Yarn
+node_modules/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/install-state.gz
+.pnp.*
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+
+# Monitoring data
+monitoring/prometheus/data/
+monitoring/grafana/data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude working artifacts (local only)
+claude-artifacts/
+
+# Env
+.env
+.env.local
