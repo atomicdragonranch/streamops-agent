@@ -1,0 +1,130 @@
+# StreamOps local dev stack
+#
+# Kafka (KRaft mode, no ZooKeeper): single broker for dev simplicity.
+# Flink: JobManager + TaskManager pair, enough for local job testing.
+# Prometheus + Grafana: metrics pipeline for observability (Flink exposes metrics
+# via its built-in reporter; Prometheus scrapes them, Grafana dashboards visualize).
+#
+# Usage: yarn infra:up  (or docker compose up -d)
+# Teardown: yarn infra:down
+
+services:
+  # --- Kafka (KRaft) ---
+  # KRaft eliminates ZooKeeper, reducing the dev stack from 2 services to 1.
+  # Using Confluent's image because it handles KRaft config out of the box.
+  kafka:
+    image: confluentinc/cp-kafka:7.8.0
+    container_name: streamops-kafka
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,HOST://0.0.0.0:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: kafka-topics --bootstrap-server localhost:9092 --list
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Create topics on startup so the simulator and processor don't need to
+  kafka-init:
+    image: confluentinc/cp-kafka:7.8.0
+    container_name: streamops-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic stream-events --partitions 4 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic stream-alerts --partitions 2 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic stream-metrics --partitions 4 --replication-factor 1
+      echo 'Topics created successfully'
+      "
+
+  # --- Flink ---
+  # JobManager: coordinates the cluster, accepts job submissions
+  flink-jobmanager:
+    image: flink:1.20-java17
+    container_name: streamops-flink-jm
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        state.backend.type: rocksdb
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        state.savepoints.dir: file:///tmp/flink-savepoints
+        execution.checkpointing.interval: 30s
+        metrics.reporters: prom
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+    volumes:
+      - flink-checkpoints:/tmp/flink-checkpoints
+      - flink-savepoints:/tmp/flink-savepoints
+
+  # TaskManager: executes the actual operators (1 is enough for local dev)
+  flink-taskmanager:
+    image: flink:1.20-java17
+    container_name: streamops-flink-tm
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        state.backend.type: rocksdb
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        metrics.reporters: prom
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+    volumes:
+      - flink-checkpoints:/tmp/flink-checkpoints
+
+  # --- Observability ---
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: streamops-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - flink-jobmanager
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: streamops-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: streamops
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  flink-checkpoints:
+  flink-savepoints:
+  grafana-data:

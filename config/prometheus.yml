@@ -1,0 +1,15 @@
+# Prometheus config for StreamOps local dev
+# Scrapes Flink's built-in Prometheus reporter on both JM and TM
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: flink
+    static_configs:
+      - targets:
+          - flink-jobmanager:9249
+          - flink-taskmanager:9249
+        labels:
+          cluster: streamops-local
