@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package streamops.events;
+
+option java_package = "com.streamops.proto";
+option java_outer_classname = "StreamEventsProto";
+option java_multiple_files = true;
+
+// Core event envelope. Every message through the pipeline uses this wrapper.
+// The oneof payload keeps the schema extensible without breaking existing consumers:
+// add a new message type, bump the field number, and older code simply ignores it.
+message StreamEvent {
+    string event_id = 1;
+    int64 timestamp_ms = 2;
+    string source = 3;
+
+    oneof payload {
+        MetricEvent metric = 10;
+        LogEvent log = 11;
+        AlertEvent alert = 12;
+        HeartbeatEvent heartbeat = 13;
+    }
+}
+
+// Numeric metric from a streaming component (throughput, latency, backpressure, etc.).
+// Using double for value because streaming metrics span many orders of magnitude
+// (nanosecond latencies to millions of records/sec).
+message MetricEvent {
+    string metric_name = 1;
+    double value = 2;
+    string unit = 3;
+    string component = 4;
+    map<string, string> tags = 5;
+}
+
+// Structured log line from a streaming component. Severity uses a simple enum
+// rather than a string to keep wire size small and enable efficient filtering
+// in Flink without string comparisons.
+message LogEvent {
+    Severity severity = 1;
+    string message = 2;
+    string component = 3;
+    string logger_name = 4;
+    string stack_trace = 5;
+    map<string, string> context = 6;
+}
+
+enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    DEBUG = 1;
+    INFO = 2;
+    WARN = 3;
+    ERROR = 4;
+    FATAL = 5;
+}
+
+// Alert emitted by the stream processor when anomaly detection triggers.
+// The Flink job produces these; the AI agent consumes them.
+message AlertEvent {
+    string alert_id = 1;
+    AlertSeverity severity = 2;
+    string rule_name = 3;
+    string description = 4;
+    string component = 5;
+    double threshold = 6;
+    double actual_value = 7;
+    int64 window_start_ms = 8;
+    int64 window_end_ms = 9;
+    map<string, string> labels = 10;
+}
+
+enum AlertSeverity {
+    ALERT_SEVERITY_UNSPECIFIED = 0;
+    WARNING = 1;
+    CRITICAL = 2;
+    PAGE = 3;
+}
+
+// Liveness signal. Components emit these periodically so the agent can detect
+// silent failures (a component that stops heartbeating is likely dead or stuck).
+message HeartbeatEvent {
+    string component = 1;
+    ComponentStatus status = 2;
+    int64 uptime_ms = 3;
+    map<string, string> metadata = 4;
+}
+
+enum ComponentStatus {
+    COMPONENT_STATUS_UNSPECIFIED = 0;
+    HEALTHY = 1;
+    DEGRADED = 2;
+    UNHEALTHY = 3;
+}
