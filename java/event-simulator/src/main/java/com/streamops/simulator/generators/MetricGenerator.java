@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
@@ -14,6 +15,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * Generates realistic streaming infrastructure metrics. Normal operation produces
  * values within healthy ranges; anomaly injection shifts the distribution to
  * simulate degradation the Flink job should detect.
+ *
+ * All value ranges are loaded from application.properties so they can be tuned
+ * per environment without code changes.
  */
 public class MetricGenerator {
 
@@ -29,6 +33,19 @@ public class MetricGenerator {
     };
 
     private final AtomicReference<AnomalyState> anomaly = new AtomicReference<>(AnomalyState.NONE);
+    private final Properties config;
+
+    public MetricGenerator() {
+        this(new Properties());
+    }
+
+    public MetricGenerator(Properties config) {
+        this.config = config;
+    }
+
+    private double prop(String key, double defaultValue) {
+        return Double.parseDouble(config.getProperty(key, String.valueOf(defaultValue)));
+    }
 
     public StreamEvent generate() {
         ThreadLocalRandom rng = ThreadLocalRandom.current();
@@ -60,23 +77,23 @@ public class MetricGenerator {
         AnomalyState state = anomaly.get();
         return switch (metricName) {
             case "records_per_second" -> state == AnomalyState.THROUGHPUT_DROP
-                ? rng.nextDouble(10, 100)       // ~99% drop
-                : rng.nextDouble(5000, 15000);
+                ? rng.nextDouble(prop("metric.throughput.anomaly.min", 10), prop("metric.throughput.anomaly.max", 100))
+                : rng.nextDouble(prop("metric.throughput.normal.min", 5000), prop("metric.throughput.normal.max", 15000));
             case "latency_ms" -> state == AnomalyState.LATENCY_SPIKE
-                ? rng.nextDouble(500, 5000)     // 10-100x normal
-                : rng.nextDouble(1, 50);
+                ? rng.nextDouble(prop("metric.latency.anomaly.min", 500), prop("metric.latency.anomaly.max", 5000))
+                : rng.nextDouble(prop("metric.latency.normal.min", 1), prop("metric.latency.normal.max", 50));
             case "backpressure_ratio" -> state == AnomalyState.BACKPRESSURE
-                ? rng.nextDouble(0.7, 1.0)      // severe backpressure
-                : rng.nextDouble(0, 0.1);
+                ? rng.nextDouble(prop("metric.backpressure.anomaly.min", 0.7), prop("metric.backpressure.anomaly.max", 1.0))
+                : rng.nextDouble(prop("metric.backpressure.normal.min", 0.0), prop("metric.backpressure.normal.max", 0.1));
             case "checkpoint_duration_ms" -> state == AnomalyState.CHECKPOINT_SLOW
-                ? rng.nextDouble(30000, 120000) // 30s-2min (timeout range)
-                : rng.nextDouble(500, 5000);
+                ? rng.nextDouble(prop("metric.checkpoint.anomaly.min", 30000), prop("metric.checkpoint.anomaly.max", 120000))
+                : rng.nextDouble(prop("metric.checkpoint.normal.min", 500), prop("metric.checkpoint.normal.max", 5000));
             case "heap_usage_percent" -> state == AnomalyState.MEMORY_PRESSURE
-                ? rng.nextDouble(85, 99)        // GC thrashing territory
-                : rng.nextDouble(30, 70);
+                ? rng.nextDouble(prop("metric.heap.anomaly.min", 85), prop("metric.heap.anomaly.max", 99))
+                : rng.nextDouble(prop("metric.heap.normal.min", 30), prop("metric.heap.normal.max", 70));
             case "consumer_lag" -> state == AnomalyState.THROUGHPUT_DROP
-                ? rng.nextDouble(50000, 500000) // lag building fast
-                : rng.nextDouble(0, 1000);
+                ? rng.nextDouble(prop("metric.consumer.lag.anomaly.min", 50000), prop("metric.consumer.lag.anomaly.max", 500000))
+                : rng.nextDouble(prop("metric.consumer.lag.normal.min", 0), prop("metric.consumer.lag.normal.max", 1000));
             default -> rng.nextDouble(0, 100);
         };
     }

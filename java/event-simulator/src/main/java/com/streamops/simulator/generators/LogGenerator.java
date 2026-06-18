@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -15,6 +16,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Generates structured log events mirroring real Flink/Kafka component output.
  * In normal mode, most logs are INFO/DEBUG; error burst mode shifts the distribution
  * to produce ERROR/WARN patterns the anomaly detector should flag.
+ *
+ * Error probabilities are loaded from application.properties.
  */
 public class LogGenerator {
 
@@ -53,13 +56,28 @@ public class LogGenerator {
     };
 
     private final AtomicBoolean errorBurstMode = new AtomicBoolean(false);
+    private final double errorBurstProbability;
+    private final double normalErrorProbability;
+    private final double stacktraceProbability;
+    private final double debugProbability;
+
+    public LogGenerator() {
+        this(new Properties());
+    }
+
+    public LogGenerator(Properties config) {
+        this.errorBurstProbability = Double.parseDouble(config.getProperty("log.error.burst.probability", "0.6"));
+        this.normalErrorProbability = Double.parseDouble(config.getProperty("log.normal.error.probability", "0.05"));
+        this.stacktraceProbability = Double.parseDouble(config.getProperty("log.stacktrace.probability", "0.5"));
+        this.debugProbability = Double.parseDouble(config.getProperty("log.debug.probability", "0.3"));
+    }
 
     public StreamEvent generate() {
         ThreadLocalRandom rng = ThreadLocalRandom.current();
         String component = COMPONENTS[rng.nextInt(COMPONENTS.length)];
         boolean isError = errorBurstMode.get()
-            ? rng.nextDouble() < 0.6   // 60% errors during burst
-            : rng.nextDouble() < 0.05; // 5% errors during normal operation
+            ? rng.nextDouble() < errorBurstProbability
+            : rng.nextDouble() < normalErrorProbability;
 
         Severity severity;
         String message;
@@ -68,11 +86,11 @@ public class LogGenerator {
         if (isError) {
             severity = rng.nextBoolean() ? Severity.ERROR : Severity.WARN;
             message = ERROR_MESSAGES[rng.nextInt(ERROR_MESSAGES.length)];
-            if (severity == Severity.ERROR && rng.nextDouble() < 0.5) {
+            if (severity == Severity.ERROR && rng.nextDouble() < stacktraceProbability) {
                 stackTrace = ERROR_STACK_TRACES[rng.nextInt(ERROR_STACK_TRACES.length)];
             }
         } else {
-            severity = rng.nextDouble() < 0.3 ? Severity.DEBUG : Severity.INFO;
+            severity = rng.nextDouble() < debugProbability ? Severity.DEBUG : Severity.INFO;
             message = NORMAL_MESSAGES[rng.nextInt(NORMAL_MESSAGES.length)];
         }
 

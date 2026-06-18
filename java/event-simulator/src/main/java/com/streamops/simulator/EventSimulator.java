@@ -14,6 +14,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -23,9 +25,12 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Standalone Kafka producer that generates realistic streaming infrastructure events.
  *
- * Three generators run on independent schedules to simulate a live environment:
- * metrics (1s), logs (2s), heartbeats (5s). A ScenarioRunner injects anomalies
- * (latency spikes, error bursts, backpressure) on demand via CLI arg or API.
+ * Three generators run on independent schedules to simulate a live environment.
+ * A ScenarioRunner injects anomalies (latency spikes, error bursts, backpressure)
+ * on demand via CLI arg or API.
+ *
+ * All timing, thresholds, and ranges are loaded from application.properties.
+ * Override via environment variables: KAFKA_BOOTSTRAP, KAFKA_TOPIC.
  *
  * This is a separate process from the Flink job. In production, real infrastructure
  * generates these events; the simulator stands in during local dev and demos.
@@ -34,9 +39,7 @@ public class EventSimulator {
 
     private static final Logger LOG = LoggerFactory.getLogger(EventSimulator.class);
 
-    private static final String DEFAULT_TOPIC = "stream-events";
-    private static final String DEFAULT_BOOTSTRAP = "localhost:9092";
-
+    private final Properties config;
     private final KafkaProducer<String, byte[]> producer;
     private final ScheduledExecutorService scheduler;
     private final MetricGenerator metricGenerator;
@@ -48,20 +51,24 @@ public class EventSimulator {
     private final AtomicLong errorCount = new AtomicLong(0);
 
     public EventSimulator() {
-        this(
-            System.getenv().getOrDefault("KAFKA_BOOTSTRAP", DEFAULT_BOOTSTRAP),
-            System.getenv().getOrDefault("KAFKA_TOPIC", DEFAULT_TOPIC)
-        );
+        this(loadProperties());
     }
 
-    public EventSimulator(String bootstrapServers, String topic) {
-        this.topic = topic;
+    public EventSimulator(Properties config) {
+        this.config = config;
+
+        String bootstrapServers = envOrDefault("KAFKA_BOOTSTRAP",
+            config.getProperty("kafka.bootstrap", "localhost:9092"));
+        this.topic = envOrDefault("KAFKA_TOPIC",
+            config.getProperty("kafka.topic", "stream-events"));
+
         this.producer = createProducer(bootstrapServers);
-        this.scheduler = Executors.newScheduledThreadPool(4);
-        this.metricGenerator = new MetricGenerator();
-        this.logGenerator = new LogGenerator();
+        int threadPoolSize = Integer.parseInt(config.getProperty("simulator.thread.pool.size", "4"));
+        this.scheduler = Executors.newScheduledThreadPool(threadPoolSize);
+        this.metricGenerator = new MetricGenerator(config);
+        this.logGenerator = new LogGenerator(config);
         this.heartbeatGenerator = new HeartbeatGenerator();
-        this.scenarioRunner = new ScenarioRunner(metricGenerator, logGenerator);
+        this.scenarioRunner = new ScenarioRunner(metricGenerator, logGenerator, config);
 
         LOG.info("Simulator initialized: bootstrap={}, topic={}", bootstrapServers, topic);
     }
@@ -71,30 +78,38 @@ public class EventSimulator {
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-        // acks=1: leader acknowledgement only; acceptable for simulator traffic
-        props.put(ProducerConfig.ACKS_CONFIG, "1");
-        props.put(ProducerConfig.LINGER_MS_CONFIG, 5);
-        props.put(ProducerConfig.BATCH_SIZE_CONFIG, 16384);
+        props.put(ProducerConfig.ACKS_CONFIG, config.getProperty("kafka.producer.acks", "1"));
+        props.put(ProducerConfig.LINGER_MS_CONFIG,
+            Integer.parseInt(config.getProperty("kafka.producer.linger.ms", "5")));
+        props.put(ProducerConfig.BATCH_SIZE_CONFIG,
+            Integer.parseInt(config.getProperty("kafka.producer.batch.size", "16384")));
 
-        LOG.debug("Kafka producer config: bootstrap={}, acks=1, linger=5ms", bootstrapServers);
+        LOG.debug("Kafka producer config: bootstrap={}, acks={}, linger={}ms",
+            bootstrapServers, props.get(ProducerConfig.ACKS_CONFIG), props.get(ProducerConfig.LINGER_MS_CONFIG));
         return new KafkaProducer<>(props);
     }
 
     public void start() {
         MDC.put("component", "event-simulator");
 
-        LOG.info("Starting event generators: metrics=1s, logs=2s, heartbeats=5s");
+        int metricInterval = Integer.parseInt(config.getProperty("simulator.metric.interval.seconds", "1"));
+        int logInterval = Integer.parseInt(config.getProperty("simulator.log.interval.seconds", "2"));
+        int heartbeatInterval = Integer.parseInt(config.getProperty("simulator.heartbeat.interval.seconds", "5"));
+        int progressInterval = Integer.parseInt(config.getProperty("simulator.progress.interval.seconds", "10"));
+
+        LOG.info("Starting event generators: metrics={}s, logs={}s, heartbeats={}s",
+            metricInterval, logInterval, heartbeatInterval);
 
         scheduler.scheduleAtFixedRate(
-            () -> safeSend(metricGenerator.generate()), 0, 1, TimeUnit.SECONDS);
+            () -> safeSend(metricGenerator.generate()), 0, metricInterval, TimeUnit.SECONDS);
 
         scheduler.scheduleAtFixedRate(
-            () -> safeSend(logGenerator.generate()), 500, 2, TimeUnit.SECONDS);
+            () -> safeSend(logGenerator.generate()), 500, logInterval, TimeUnit.SECONDS);
 
         scheduler.scheduleAtFixedRate(
-            () -> safeSend(heartbeatGenerator.generate()), 0, 5, TimeUnit.SECONDS);
+            () -> safeSend(heartbeatGenerator.generate()), 0, heartbeatInterval, TimeUnit.SECONDS);
 
-        scheduler.scheduleAtFixedRate(this::logProgress, 10, 10, TimeUnit.SECONDS);
+        scheduler.scheduleAtFixedRate(this::logProgress, progressInterval, progressInterval, TimeUnit.SECONDS);
 
         LOG.info("Simulator running. Ctrl+C to stop.");
     }
@@ -147,10 +162,11 @@ public class EventSimulator {
         LOG.info("Shutting down simulator. Total sent={}, errors={}",
             eventCount.get(), errorCount.get());
 
+        int shutdownTimeout = Integer.parseInt(config.getProperty("simulator.shutdown.timeout.seconds", "5"));
         scheduler.shutdown();
         try {
-            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                LOG.warn("Scheduler did not terminate in 5s, forcing shutdown");
+            if (!scheduler.awaitTermination(shutdownTimeout, TimeUnit.SECONDS)) {
+                LOG.warn("Scheduler did not terminate in {}s, forcing shutdown", shutdownTimeout);
                 scheduler.shutdownNow();
             }
         } catch (InterruptedException e) {
@@ -169,6 +185,26 @@ public class EventSimulator {
 
     public long getErrorCount() {
         return errorCount.get();
+    }
+
+    private static Properties loadProperties() {
+        Properties props = new Properties();
+        try (InputStream is = EventSimulator.class.getClassLoader()
+                .getResourceAsStream("application.properties")) {
+            if (is != null) {
+                props.load(is);
+            } else {
+                LOG.warn("application.properties not found on classpath, using defaults");
+            }
+        } catch (IOException e) {
+            LOG.warn("Failed to load application.properties: {}", e.getMessage());
+        }
+        return props;
+    }
+
+    private static String envOrDefault(String envKey, String defaultValue) {
+        String value = System.getenv(envKey);
+        return value != null && !value.isBlank() ? value : defaultValue;
     }
 
     public static void main(String[] args) {
