@@ -1,10 +1,12 @@
 package com.streamops.processor;
 
+import com.streamops.processor.functions.ProtobufKryoSerializer;
 import com.streamops.processor.functions.StreamEventDeserializer;
 import com.streamops.processor.operators.AnomalyDetector;
 import com.streamops.processor.operators.MetricAggregator;
 import com.streamops.proto.StreamEvent;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.serialization.SerializerConfigImpl;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
@@ -54,6 +56,8 @@ public class StreamProcessorApp {
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.enableCheckpointing(checkpointInterval);
+        ((SerializerConfigImpl) env.getConfig().getSerializerConfig())
+                .registerTypeWithKryoSerializer(StreamEvent.class, ProtobufKryoSerializer.class);
 
         KafkaSource<StreamEvent> source = KafkaSource.<StreamEvent>builder()
             .setBootstrapServers(bootstrap)

@@ -1,0 +1,316 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Job Uptime",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 60000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "flink_jobmanager_job_uptime", "legendFormat": "{{job_name}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Restarts",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "flink_jobmanager_job_numRestarts", "legendFormat": "restarts", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Completed Checkpoints",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "flink_jobmanager_job_numberOfCompletedCheckpoints", "legendFormat": "completed", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Failed Checkpoints",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "flink_jobmanager_job_numberOfFailedCheckpoints", "legendFormat": "failed", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Task Slots",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "flink_jobmanager_taskSlotsTotal - flink_jobmanager_taskSlotsAvailable", "legendFormat": "used", "refId": "A" },
+        { "expr": "flink_jobmanager_taskSlotsTotal", "legendFormat": "total", "refId": "B" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Task Managers",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "flink_jobmanager_numRegisteredTaskManagers", "legendFormat": "registered", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Records In / Out (per operator)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "pointSize": 5, "showPoints": "never" },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] } },
+      "targets": [
+        { "expr": "rate(flink_taskmanager_job_task_operator_numRecordsIn[1m])", "legendFormat": "in: {{operator_name}}", "refId": "A" },
+        { "expr": "rate(flink_taskmanager_job_task_operator_numRecordsOut[1m])", "legendFormat": "out: {{operator_name}}", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Backpressure (ms/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 500 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] } },
+      "targets": [
+        { "expr": "flink_taskmanager_job_task_backPressuredTimeMsPerSecond", "legendFormat": "{{task_name}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Checkpoint Duration",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5000 },
+              { "color": "red", "value": 30000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "flink_jobmanager_job_lastCheckpointDuration", "legendFormat": "duration", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Checkpoint Size",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "flink_jobmanager_job_lastCheckpointFullSize", "legendFormat": "full size", "refId": "A" },
+        { "expr": "flink_jobmanager_job_lastCheckpointPersistedData", "legendFormat": "persisted data", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM Heap Memory",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20 },
+          "unit": "bytes"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "max" }, "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash" } }, { "id": "custom.fillOpacity", "value": 0 }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "flink_taskmanager_Status_JVM_Memory_Heap_Used", "legendFormat": "TM used", "refId": "A" },
+        { "expr": "flink_taskmanager_Status_JVM_Memory_Heap_Max", "legendFormat": "TM max", "refId": "B" },
+        { "expr": "flink_jobmanager_Status_JVM_Memory_Heap_Used", "legendFormat": "JM used", "refId": "C" },
+        { "expr": "flink_jobmanager_Status_JVM_Memory_Heap_Max", "legendFormat": "JM max", "refId": "D" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "GC Time (ms/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] } },
+      "targets": [
+        { "expr": "flink_taskmanager_Status_JVM_GarbageCollector_All_TimeMsPerSecond", "legendFormat": "TM GC", "refId": "A" },
+        { "expr": "flink_jobmanager_Status_JVM_GarbageCollector_All_TimeMsPerSecond", "legendFormat": "JM GC", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Task Busy / Idle / Backpressured (%)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "stacking": { "mode": "normal" } },
+          "unit": "ms",
+          "max": 1000
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "flink_taskmanager_job_task_busyTimeMsPerSecond", "legendFormat": "busy: {{task_name}}", "refId": "A" },
+        { "expr": "flink_taskmanager_job_task_backPressuredTimeMsPerSecond", "legendFormat": "backpressured: {{task_name}}", "refId": "B" },
+        { "expr": "flink_taskmanager_job_task_idleTimeMsPerSecond", "legendFormat": "idle: {{task_name}}", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Kafka Consumer (records/commits)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "rate(flink_taskmanager_job_task_operator_KafkaSourceReader_KafkaConsumer_records_consumed_total[1m])", "legendFormat": "records consumed/s", "refId": "A" },
+        { "expr": "rate(flink_taskmanager_job_task_operator_KafkaSourceReader_KafkaConsumer_commit_total[1m])", "legendFormat": "commits/s", "refId": "B" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["flink", "streamops"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Flink Overview",
+  "uid": "streamops-flink-overview",
+  "version": 1
+}

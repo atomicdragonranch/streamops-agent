@@ -48,7 +48,7 @@ class StreamOpsConfig(BaseSettings):
     events_log_scan_depth: int = 500
 
     # Agent configuration
-    agent_model: str = "claude-sonnet-4-20250514"
+    agent_model: str = "claude-sonnet-4-6"
     agent_max_tokens: int = 4096
     agent_max_tool_rounds: int = 15
     agent_monitor_interval: int = 60

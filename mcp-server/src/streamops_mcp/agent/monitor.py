@@ -151,7 +151,10 @@ class MonitorAgent:
             if response.stop_reason == "end_turn":
                 logger.info("Detection complete after %d rounds", round_num + 1)
                 if self._mentions_anomaly(assistant_text):
+                    summary = assistant_text[:300].replace("\n", " ")
+                    logger.info("Anomaly detected: %s", summary)
                     return assistant_text
+                logger.info("No anomalies found in detection response")
                 return None
 
             if response.stop_reason == "tool_use":
@@ -195,6 +198,10 @@ Use the available tools to determine the root cause. Respond with a JSON object 
         }]
 
         for round_num in range(self.max_tool_rounds):
+            if not messages or messages[-1]["role"] != "user":
+                logger.warning("Diagnostic Agent: messages ended on non-user role, ending early")
+                break
+
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=config.agent_max_tokens,
@@ -218,7 +225,7 @@ Use the available tools to determine the root cause. Respond with a JSON object 
                 logger.info("Diagnostic Agent completed after %d rounds", round_num + 1)
                 return self._parse_diagnosis(assistant_text)
 
-            if response.stop_reason == "tool_use":
+            if response.stop_reason == "tool_use" and tool_calls:
                 tool_results = []
                 for tool_call in tool_calls:
                     result = await execute_tool(tool_call.name, tool_call.input)

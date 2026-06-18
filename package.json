@@ -44,7 +44,8 @@
     "test:python": "cd mcp-server && python -m pytest tests/ -v",
     "test:all": "cd java && mvn test && cd ../mcp-server && python -m pytest tests/ -v",
 
-    "grafana:open": "echo 'Grafana: http://localhost:3000 (admin/streamops)'",
-    "prometheus:open": "echo 'Prometheus: http://localhost:9090'"
+    "grafana:open": "echo 'Grafana: http://localhost:3333 (admin/streamops)'",
+    "prometheus:open": "echo 'Prometheus: http://localhost:9090'",
+    "kafka-ui:open": "echo 'Kafka UI: http://localhost:8080'"
   }
 }

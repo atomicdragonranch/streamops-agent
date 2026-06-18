@@ -7,6 +7,7 @@ the coordinator translates that into PromQL before calling this tool.
 """
 
 import logging
+import time
 from typing import Optional
 
 import httpx
@@ -36,10 +37,12 @@ def register_prometheus_tools(mcp: FastMCP):
         try:
             async with httpx.AsyncClient(base_url=config.prometheus_url, timeout=config.http_timeout) as client:
                 if time_range:
+                    end = time.time()
+                    start = end - _parse_duration(time_range)
                     response = await client.get("/api/v1/query_range", params={
                         "query": query,
-                        "start": f"now()-{time_range}",
-                        "end": "now()",
+                        "start": start,
+                        "end": end,
                         "step": _step_for_range(time_range),
                     })
                 else:
@@ -84,6 +87,19 @@ def register_prometheus_tools(mcp: FastMCP):
         except Exception as e:
             logger.error("Prometheus query failed: %s", e)
             return {"error": str(e)}
+
+
+def _parse_duration(time_range: str) -> float:
+    """Convert a duration string like '5m', '1h', '2d' to seconds."""
+    if time_range.endswith("s"):
+        return float(time_range[:-1])
+    if time_range.endswith("m"):
+        return float(time_range[:-1]) * 60
+    if time_range.endswith("h"):
+        return float(time_range[:-1]) * 3600
+    if time_range.endswith("d"):
+        return float(time_range[:-1]) * 86400
+    return 900.0
 
 
 def _step_for_range(time_range: str) -> str:
