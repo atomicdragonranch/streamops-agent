@@ -1,0 +1,38 @@
+{
+  "incident_id": "inc-ct-001",
+  "title": "Checkpoint timeout on StreamOps Flink processor",
+  "severity": "CRITICAL",
+  "summary": "Flink checkpoints are failing with timeout. Last successful checkpoint was 5 minutes ago; current attempt has been running for 45s (threshold: 30s). Risk of data loss if the job restarts without a valid checkpoint.",
+  "anomaly_type": "checkpoint_failure",
+  "root_cause": "RocksDB state backend compaction is stalled under write amplification. The state size has grown beyond what the current compaction settings can handle within the checkpoint interval.",
+  "affected_components": ["state-backend", "checkpoint-coordinator", "flink-operator"],
+  "timeline": [
+    "T+0s: Checkpoint timeout scenario injected by simulator",
+    "T+10s: MetricGenerator begins emitting checkpoint_duration_ms values in 30000-60000ms range",
+    "T+20s: Error logs show checkpoint coordinator timeout warnings",
+    "T+25s: Agent detects checkpoint failure via get_checkpoint_stats",
+    "T+30s: Diagnostic Agent correlates with state backend metrics and GC pressure",
+    "T+35s: Report Agent classifies as CRITICAL due to data loss risk"
+  ],
+  "recommended_actions": [
+    {
+      "action": "Increase state.backend.rocksdb.compaction.level.max-size-level-base to 256MB",
+      "rationale": "Reduces write amplification by allowing larger SST files, speeding up compaction",
+      "risk": "low",
+      "requires_downtime": true
+    },
+    {
+      "action": "Enable incremental checkpointing (execution.checkpointing.incremental=true)",
+      "rationale": "Only diffs are snapshotted instead of full state, dramatically reducing checkpoint size",
+      "risk": "low",
+      "requires_downtime": true
+    },
+    {
+      "action": "Trigger a manual savepoint before making changes",
+      "rationale": "Preserves current state in case the configuration changes cause unexpected behavior",
+      "risk": "none",
+      "requires_downtime": false
+    }
+  ],
+  "monitoring_notes": "After config changes and restart, monitor checkpoint_duration_ms (should stay under 10s), checkpoint_size_bytes, and rocksdb_compaction_pending. Alert if checkpoint duration exceeds 20s again within the first hour."
+}

@@ -1,0 +1,32 @@
+{
+  "incident_id": "inc-bp-001",
+  "title": "Severe backpressure on StreamOps pipeline",
+  "severity": "HIGH",
+  "summary": "Backpressure ratio reached 0.92 (threshold: 0.5) on the sink operator. Upstream operators are throttled, causing consumer lag to grow at 5,000 messages/minute. Processing latency rising as a secondary effect.",
+  "anomaly_type": "backpressure",
+  "root_cause": "Downstream sink (Kafka producer to stream-alerts topic) cannot keep up with the output rate. The alert topic may have insufficient partitions or the sink parallelism is too low.",
+  "affected_components": ["kafka-producer", "flink-operator", "kafka-consumer"],
+  "timeline": [
+    "T+0s: Backpressure scenario injected by simulator",
+    "T+5s: MetricGenerator begins emitting backpressure_ratio values in 0.8-1.0 range",
+    "T+15s: AnomalyDetector EMA crosses 0.5 threshold",
+    "T+20s: Agent detects backpressure via Flink job metrics",
+    "T+24s: Diagnostic Agent confirms cascading effect from sink to source",
+    "T+27s: Report Agent classifies as HIGH due to growing lag and SLA risk"
+  ],
+  "recommended_actions": [
+    {
+      "action": "Increase sink operator parallelism from 1 to 4",
+      "rationale": "Sink is the bottleneck; increasing parallelism distributes the write load across more threads",
+      "risk": "low",
+      "requires_downtime": true
+    },
+    {
+      "action": "Add partitions to the stream-alerts topic",
+      "rationale": "Sink parallelism is bounded by partition count; more partitions enable more parallel writers",
+      "risk": "none",
+      "requires_downtime": false
+    }
+  ],
+  "monitoring_notes": "After scaling, monitor backpressure_ratio (should drop below 0.3) and consumer lag (should stabilize within 5 minutes). Also watch for checkpoint duration increases as state redistribution occurs."
+}

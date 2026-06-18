@@ -44,6 +44,12 @@ Thumbs.db
 # Claude working artifacts (local only)
 claude-artifacts/
 
+# Demo output (live runs only; examples/ is tracked)
+demo-output/*.json
+demo-output/*_incident.json
+demo-output/*_healthy.json
+!demo-output/examples/
+
 # Env
 .env
 .env.local

@@ -1,0 +1,38 @@
+{
+  "incident_id": "inc-mp-001",
+  "title": "Memory pressure on Flink TaskManager",
+  "severity": "HIGH",
+  "summary": "Heap usage at 94% (threshold: 85%) on the TaskManager JVM. GC pause times averaging 380ms, causing visible processing latency. Risk of OOM kill if load increases or state grows.",
+  "anomaly_type": "memory_pressure",
+  "root_cause": "TaskManager heap is undersized for the current state volume. RocksDB off-heap memory plus managed memory is pushing total JVM usage into GC thrashing territory.",
+  "affected_components": ["state-backend", "flink-operator"],
+  "timeline": [
+    "T+0s: Memory pressure scenario injected by simulator",
+    "T+5s: MetricGenerator begins emitting heap_usage_percent values in 88-98% range",
+    "T+10s: AnomalyDetector EMA crosses 85% threshold",
+    "T+15s: Agent detects memory anomaly via query_metrics (heap + GC metrics)",
+    "T+20s: Diagnostic Agent correlates heap, GC pause times, and state size",
+    "T+24s: Report Agent classifies as HIGH due to OOM risk"
+  ],
+  "recommended_actions": [
+    {
+      "action": "Increase TaskManager heap from 2GB to 4GB (-Dtaskmanager.memory.process.size=4096m)",
+      "rationale": "Direct fix for insufficient heap. Gives GC more headroom and reduces pause frequency.",
+      "risk": "low",
+      "requires_downtime": true
+    },
+    {
+      "action": "Tune RocksDB block cache size to reduce off-heap pressure",
+      "rationale": "Default block cache may be oversized for the workload, competing with managed memory",
+      "risk": "medium",
+      "requires_downtime": true
+    },
+    {
+      "action": "Enable state TTL to expire stale keyed state",
+      "rationale": "If state is accumulating without cleanup, TTL prevents unbounded growth",
+      "risk": "medium",
+      "requires_downtime": true
+    }
+  ],
+  "monitoring_notes": "After heap increase, watch heap_usage_percent (should stay below 75%), gc_pause_ms (should drop below 100ms), and process RSS. If heap usage climbs back above 80% within 24 hours, investigate state growth patterns."
+}

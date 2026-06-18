@@ -1,0 +1,32 @@
+{
+  "incident_id": "inc-td-001",
+  "title": "Throughput drop on StreamOps pipeline",
+  "severity": "HIGH",
+  "summary": "Throughput dropped to 12 events/sec from a baseline of 1,200 events/sec, a 99% reduction. Consumer lag is growing rapidly at 45,000+ messages. Likely caused by upstream partition failure or producer connectivity issues.",
+  "anomaly_type": "throughput_drop",
+  "root_cause": "Upstream Kafka producer is emitting at drastically reduced rate. No errors on the Flink consumer side; the pipeline is healthy but starved for input.",
+  "affected_components": ["kafka-consumer", "kafka-producer"],
+  "timeline": [
+    "T+0s: Throughput drop scenario injected by simulator",
+    "T+5s: MetricGenerator begins emitting throughput_events_per_sec values near 0-50",
+    "T+15s: Consumer lag begins accumulating as new events trickle in",
+    "T+20s: Agent detects throughput anomaly and growing consumer lag",
+    "T+25s: Diagnostic Agent confirms Flink job is RUNNING but idle",
+    "T+28s: Report Agent classifies as HIGH severity due to SLA risk"
+  ],
+  "recommended_actions": [
+    {
+      "action": "Check upstream Kafka producer health and connectivity",
+      "rationale": "Flink consumer is healthy; the bottleneck is on the producer side",
+      "risk": "none",
+      "requires_downtime": false
+    },
+    {
+      "action": "Verify Kafka partition leadership and ISR status",
+      "rationale": "A partition leader election or ISR shrink could explain the throughput collapse",
+      "risk": "none",
+      "requires_downtime": false
+    }
+  ],
+  "monitoring_notes": "Watch throughput_events_per_sec and consumer lag. Once the producer recovers, the pipeline should clear the backlog automatically. Alert if lag does not decrease within 10 minutes of throughput recovery."
+}

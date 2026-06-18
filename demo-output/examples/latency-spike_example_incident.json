@@ -1,0 +1,32 @@
+{
+  "incident_id": "inc-ls-001",
+  "title": "Latency spike on StreamOps pipeline",
+  "severity": "HIGH",
+  "summary": "Processing latency spiked to 2,340ms (threshold: 200ms) across kafka-consumer and flink-operator components. Correlated with heap usage at 92% on the TaskManager, suggesting GC pressure as the root cause.",
+  "anomaly_type": "latency_spike",
+  "root_cause": "GC pressure on Flink TaskManager causing processing delays. Heap at 92% with 450ms GC pause times correlating with latency spikes.",
+  "affected_components": ["kafka-consumer", "flink-operator", "state-backend"],
+  "timeline": [
+    "T+0s: Latency spike scenario injected by simulator",
+    "T+5s: MetricGenerator begins emitting latency_ms values in 2000-5000ms range",
+    "T+10s: AnomalyDetector EMA crosses 200ms threshold, fires alert",
+    "T+15s: Agent monitoring cycle detects anomaly via Flink job status and consumer lag",
+    "T+18s: Diagnostic Agent investigates with query_flink_jobs, query_metrics, get_consumer_lag",
+    "T+22s: Report Agent produces incident report with HIGH severity"
+  ],
+  "recommended_actions": [
+    {
+      "action": "Increase TaskManager heap from 2GB to 4GB",
+      "rationale": "Current heap is insufficient for state size, causing frequent GC pauses that block processing",
+      "risk": "low",
+      "requires_downtime": true
+    },
+    {
+      "action": "Enable incremental checkpointing to reduce state snapshot size",
+      "rationale": "Full checkpoints contribute to memory pressure by pinning state during snapshot",
+      "risk": "none",
+      "requires_downtime": true
+    }
+  ],
+  "monitoring_notes": "After heap increase, monitor heap_usage_percent and gc_pause_ms for 30 minutes. Latency should drop below 200ms within 2-3 checkpoint cycles."
+}

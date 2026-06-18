@@ -1,0 +1,32 @@
+{
+  "incident_id": "inc-eb-001",
+  "title": "Error burst in StreamOps pipeline logs",
+  "severity": "MEDIUM",
+  "summary": "Error rate spiked to 60% across pipeline components. Log search shows NullPointerException and TimeoutException cascading through kafka-consumer and flink-operator. No metric-level anomalies detected; this is a log-only event.",
+  "anomaly_type": "error_burst",
+  "root_cause": "Cascading exception chain initiated by intermittent Kafka consumer timeout, propagating through the Flink operator graph as NullPointerExceptions on unhandled null records.",
+  "affected_components": ["kafka-consumer", "flink-operator"],
+  "timeline": [
+    "T+0s: Error burst scenario injected by simulator",
+    "T+3s: LogGenerator begins emitting ERROR/WARN severity logs at 60% rate",
+    "T+8s: AnomalyDetector error rate counter crosses threshold",
+    "T+10s: Agent detects error burst via search_logs and recent events",
+    "T+14s: Diagnostic Agent correlates error patterns across components",
+    "T+17s: Report Agent classifies as MEDIUM (degraded but not SLA-breaking)"
+  ],
+  "recommended_actions": [
+    {
+      "action": "Add null-check guards in Flink operator deserialization path",
+      "rationale": "The NullPointerExceptions indicate missing null handling when Kafka returns empty records",
+      "risk": "low",
+      "requires_downtime": true
+    },
+    {
+      "action": "Increase Kafka consumer session.timeout.ms from 10s to 30s",
+      "rationale": "The initial timeout suggests the consumer is being evicted during brief pauses",
+      "risk": "low",
+      "requires_downtime": false
+    }
+  ],
+  "monitoring_notes": "Monitor error_rate and search for NullPointerException in logs. Error rate should drop below 0.2 within 5 minutes of the burst ending."
+}

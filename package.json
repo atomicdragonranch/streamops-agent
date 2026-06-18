@@ -16,13 +16,33 @@
 
     "sim:run": "java -jar java/event-simulator/target/event-simulator-0.1.0-SNAPSHOT.jar",
     "sim:latency": "java -jar java/event-simulator/target/event-simulator-0.1.0-SNAPSHOT.jar latency-spike",
+    "sim:throughput": "java -jar java/event-simulator/target/event-simulator-0.1.0-SNAPSHOT.jar throughput-drop",
     "sim:errors": "java -jar java/event-simulator/target/event-simulator-0.1.0-SNAPSHOT.jar error-burst",
     "sim:backpressure": "java -jar java/event-simulator/target/event-simulator-0.1.0-SNAPSHOT.jar backpressure",
+    "sim:checkpoint": "java -jar java/event-simulator/target/event-simulator-0.1.0-SNAPSHOT.jar checkpoint-timeout",
+    "sim:memory": "java -jar java/event-simulator/target/event-simulator-0.1.0-SNAPSHOT.jar memory-pressure",
 
     "flink:submit": "docker compose exec flink-jobmanager flink run /opt/flink/jobs/stream-processor.jar",
     "flink:list": "docker compose exec flink-jobmanager flink list",
     "flink:cancel": "docker compose exec flink-jobmanager flink cancel",
     "flink:ui": "echo 'Flink UI: http://localhost:8081'",
+
+    "agent:run": "cd mcp-server && uv run python -m streamops_mcp.agent.main",
+    "agent:single": "cd mcp-server && uv run python -m streamops_mcp.agent.main --single-cycle",
+
+    "demo:list": "python scripts/demo_scenario.py --list",
+    "demo:run": "python scripts/demo_scenario.py",
+    "demo:all": "python scripts/demo_scenario.py --all",
+    "demo:latency": "python scripts/demo_scenario.py latency-spike",
+    "demo:throughput": "python scripts/demo_scenario.py throughput-drop",
+    "demo:errors": "python scripts/demo_scenario.py error-burst",
+    "demo:backpressure": "python scripts/demo_scenario.py backpressure",
+    "demo:checkpoint": "python scripts/demo_scenario.py checkpoint-timeout",
+    "demo:memory": "python scripts/demo_scenario.py memory-pressure",
+
+    "test:java": "cd java && mvn test",
+    "test:python": "cd mcp-server && python -m pytest tests/ -v",
+    "test:all": "cd java && mvn test && cd ../mcp-server && python -m pytest tests/ -v",
 
     "grafana:open": "echo 'Grafana: http://localhost:3000 (admin/streamops)'",
     "prometheus:open": "echo 'Prometheus: http://localhost:9090'"
