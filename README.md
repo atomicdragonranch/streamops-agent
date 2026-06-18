@@ -294,9 +294,19 @@ Available scenarios: `latency-spike`, `throughput-drop`, `error-burst`, `backpre
 
 ### 5. Run the AI Agent
 
+Requires `ANTHROPIC_API_KEY` in your environment.
+
 ```bash
-cd mcp-server && uv sync && uv run python -m streamops_mcp.agent.main --single-cycle
+cd mcp-server && uv sync
+
+# Single cycle: run one health check, then exit
+uv run python -m streamops_mcp.agent.main --single-cycle
+
+# Continuous monitoring: repeat every 60s until stopped
+uv run python -m streamops_mcp.agent.main
 ```
+
+The monitor interval is configurable via `STREAMOPS_AGENT_MONITOR_INTERVAL` (seconds).
 
 ### Web Dashboards
 
