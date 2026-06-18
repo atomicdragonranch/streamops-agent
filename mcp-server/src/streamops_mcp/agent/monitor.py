@@ -23,6 +23,7 @@ from streamops_mcp.agent.executor import execute_tool
 from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS, REPORT_TOOLS
 from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport, Severity
 from streamops_mcp.agent.escalation import escalate
+from streamops_mcp.config import config
 
 logger = logging.getLogger("streamops-mcp.monitor")
 
@@ -67,11 +68,11 @@ class MonitorAgent:
     In multi-agent mode, it delegates diagnosis and reporting to sub-agents.
     """
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514", multi_agent: bool = True):
+    def __init__(self, model: str | None = None, multi_agent: bool = True):
         self.client = anthropic.Anthropic()
-        self.model = model
+        self.model = model or config.agent_model
         self.multi_agent = multi_agent
-        self.max_tool_rounds = 15
+        self.max_tool_rounds = config.agent_max_tool_rounds
 
     async def run_cycle(self) -> IncidentReport | None:
         """Run one monitoring cycle: poll, detect, diagnose, report.
@@ -107,7 +108,7 @@ class MonitorAgent:
 
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=config.agent_max_tokens,
                 system=MONITOR_SYSTEM_PROMPT,
                 tools=ALL_TOOLS,
                 messages=messages,
@@ -171,7 +172,7 @@ Use the available tools to determine the root cause. Respond with a JSON object 
         for round_num in range(self.max_tool_rounds):
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=config.agent_max_tokens,
                 system=DIAGNOSTIC_SYSTEM_PROMPT,
                 tools=DIAGNOSTIC_TOOLS,
                 messages=messages,
@@ -217,7 +218,7 @@ Use the available tools to determine the root cause. Respond with a JSON object 
 
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=config.agent_max_tokens,
             system=REPORT_SYSTEM_PROMPT,
             messages=[{
                 "role": "user",

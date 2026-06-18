@@ -33,7 +33,7 @@ def register_kafka_tools(mcp: FastMCP):
 
         If group_id is not specified, defaults to the Flink processor's group.
         """
-        target_group = group_id or "streamops-processor"
+        target_group = group_id or config.kafka_processor_group
         logger.info("Querying consumer lag for group '%s'", target_group)
 
         try:
@@ -43,16 +43,20 @@ def register_kafka_tools(mcp: FastMCP):
                 "enable.auto.commit": False,
             })
 
+            metadata = consumer.list_topics(config.kafka_events_topic, timeout=config.kafka_timeout)
+            topic_meta = metadata.topics.get(config.kafka_events_topic)
+            partition_count = len(topic_meta.partitions) if topic_meta else 0
+
             committed = consumer.committed(
-                [TopicPartition(config.kafka_events_topic, p) for p in range(4)],
-                timeout=5.0,
+                [TopicPartition(config.kafka_events_topic, p) for p in range(partition_count)],
+                timeout=config.kafka_timeout,
             )
 
             total_lag = 0
             partitions = []
 
             for tp in committed:
-                low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                low, high = consumer.get_watermark_offsets(tp, timeout=config.kafka_timeout)
                 committed_offset = tp.offset if tp.offset >= 0 else 0
                 lag = max(0, high - committed_offset)
                 total_lag += lag
@@ -91,11 +95,11 @@ def register_kafka_tools(mcp: FastMCP):
         try:
             consumer = Consumer({
                 "bootstrap.servers": config.kafka_bootstrap,
-                "group.id": "streamops-mcp-throughput",
+                "group.id": f"{config.kafka_mcp_group}-throughput",
                 "enable.auto.commit": False,
             })
 
-            metadata = consumer.list_topics(target_topic, timeout=5.0)
+            metadata = consumer.list_topics(target_topic, timeout=config.kafka_timeout)
             topic_meta = metadata.topics.get(target_topic)
 
             if topic_meta is None or topic_meta.error is not None:
@@ -108,7 +112,7 @@ def register_kafka_tools(mcp: FastMCP):
 
             for pid in range(partition_count):
                 tp = TopicPartition(target_topic, pid)
-                low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                low, high = consumer.get_watermark_offsets(tp, timeout=config.kafka_timeout)
                 count = high - low
                 total_messages += count
                 partitions.append({

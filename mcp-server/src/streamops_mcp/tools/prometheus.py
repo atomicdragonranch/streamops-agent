@@ -34,7 +34,7 @@ def register_prometheus_tools(mcp: FastMCP):
         logger.info("Prometheus query: %s (range=%s)", query, time_range)
 
         try:
-            async with httpx.AsyncClient(base_url=config.prometheus_url, timeout=10.0) as client:
+            async with httpx.AsyncClient(base_url=config.prometheus_url, timeout=config.http_timeout) as client:
                 if time_range:
                     response = await client.get("/api/v1/query_range", params={
                         "query": query,
@@ -59,7 +59,7 @@ def register_prometheus_tools(mcp: FastMCP):
             logger.info("Prometheus returned %d results (type=%s)", len(results), result_type)
 
             formatted = []
-            for r in results[:50]:
+            for r in results[:config.prometheus_max_results]:
                 entry = {"metric": r.get("metric", {})}
                 if result_type == "matrix":
                     entry["values"] = [

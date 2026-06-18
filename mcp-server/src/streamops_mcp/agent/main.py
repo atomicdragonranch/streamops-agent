@@ -25,7 +25,9 @@ logging.basicConfig(
 logger = logging.getLogger("streamops-mcp.agent")
 
 
-async def run_loop(interval_seconds: int = 60, multi_agent: bool = True, single_cycle: bool = False):
+async def run_loop(interval_seconds: int | None = None, multi_agent: bool = True, single_cycle: bool = False):
+    if interval_seconds is None:
+        interval_seconds = config.agent_monitor_interval
     """Main monitoring loop."""
     agent = MonitorAgent(multi_agent=multi_agent)
 
@@ -64,7 +66,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="StreamOps monitoring agent")
-    parser.add_argument("--interval", type=int, default=60, help="Polling interval in seconds")
+    parser.add_argument("--interval", type=int, default=None, help="Polling interval in seconds (default: from config)")
     parser.add_argument("--single-agent", action="store_true", help="Run in single-agent mode (no sub-agents)")
     parser.add_argument("--single-cycle", action="store_true", help="Run one cycle and exit")
     args = parser.parse_args()

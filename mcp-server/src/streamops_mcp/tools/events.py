@@ -44,14 +44,14 @@ def register_event_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def get_recent_events(
-        count: int = 20,
+        count: int = config.events_default_count,
         topic: Optional[str] = None,
         event_type: Optional[str] = None,
     ) -> dict:
         """Retrieve the N most recent events from a Kafka topic.
 
         Args:
-            count: Number of events to retrieve (max 100)
+            count: Number of events to retrieve (max configurable)
             topic: Topic to read from (defaults to stream-events)
             event_type: Filter by payload type: 'metric', 'log', 'alert', 'heartbeat'
 
@@ -59,12 +59,12 @@ def register_event_tools(mcp: FastMCP):
         not just aggregated statistics.
         """
         target_topic = topic or config.kafka_events_topic
-        count = min(count, 100)
+        count = min(count, config.events_max_count)
         logger.info("Fetching %d recent events from '%s' (type=%s)", count, target_topic, event_type)
 
         try:
             consumer = _create_consumer("recent")
-            metadata = consumer.list_topics(target_topic, timeout=5.0)
+            metadata = consumer.list_topics(target_topic, timeout=config.kafka_timeout)
             topic_meta = metadata.topics.get(target_topic)
 
             if topic_meta is None:
@@ -76,7 +76,7 @@ def register_event_tools(mcp: FastMCP):
             assignments = []
             for pid in range(partition_count):
                 tp = TopicPartition(target_topic, pid)
-                _, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                _, high = consumer.get_watermark_offsets(tp, timeout=config.kafka_timeout)
                 per_partition = max(0, count // partition_count + 1)
                 start = max(0, high - per_partition)
                 assignments.append(TopicPartition(target_topic, pid, start))
@@ -85,8 +85,8 @@ def register_event_tools(mcp: FastMCP):
 
             events = []
             empty_polls = 0
-            while len(events) < count and empty_polls < 3:
-                msg = consumer.poll(timeout=1.0)
+            while len(events) < count and empty_polls < config.events_empty_poll_threshold:
+                msg = consumer.poll(timeout=config.events_poll_timeout)
                 if msg is None:
                     empty_polls += 1
                     continue
@@ -139,27 +139,27 @@ def register_event_tools(mcp: FastMCP):
         matching the criteria. Useful for finding specific error messages or
         tracing a sequence of events around an incident.
         """
-        count = min(count, 100)
+        count = min(count, config.events_max_count)
         pattern_lower = pattern.lower()
         logger.info("Searching logs: pattern='%s', severity=%s, component=%s",
                      pattern, severity, component)
 
         try:
             consumer = _create_consumer("search")
-            metadata = consumer.list_topics(config.kafka_events_topic, timeout=5.0)
+            metadata = consumer.list_topics(config.kafka_events_topic, timeout=config.kafka_timeout)
             topic_meta = metadata.topics.get(config.kafka_events_topic)
 
             if topic_meta is None:
                 consumer.close()
                 return {"error": f"Topic '{config.kafka_events_topic}' not found"}
 
-            scan_depth = 500
+            scan_depth = config.events_log_scan_depth
             partition_count = len(topic_meta.partitions)
 
             assignments = []
             for pid in range(partition_count):
                 tp = TopicPartition(config.kafka_events_topic, pid)
-                _, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                _, high = consumer.get_watermark_offsets(tp, timeout=config.kafka_timeout)
                 start = max(0, high - (scan_depth // partition_count))
                 assignments.append(TopicPartition(config.kafka_events_topic, pid, start))
 
@@ -169,8 +169,8 @@ def register_event_tools(mcp: FastMCP):
             messages_scanned = 0
             empty_polls = 0
 
-            while len(matches) < count and empty_polls < 3 and messages_scanned < scan_depth:
-                msg = consumer.poll(timeout=1.0)
+            while len(matches) < count and empty_polls < config.events_empty_poll_threshold and messages_scanned < scan_depth:
+                msg = consumer.poll(timeout=config.events_poll_timeout)
                 if msg is None:
                     empty_polls += 1
                     continue

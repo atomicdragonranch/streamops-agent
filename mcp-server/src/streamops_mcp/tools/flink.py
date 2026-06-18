@@ -16,7 +16,7 @@ logger = logging.getLogger("streamops-mcp.flink")
 
 
 async def _flink_get(path: str) -> dict:
-    async with httpx.AsyncClient(base_url=config.flink_url, timeout=10.0) as client:
+    async with httpx.AsyncClient(base_url=config.flink_url, timeout=config.http_timeout) as client:
         response = await client.get(path)
         response.raise_for_status()
         return response.json()
@@ -146,7 +146,7 @@ def register_flink_tools(mcp: FastMCP):
                         "location": e.get("location"),
                         "timestamp": e.get("timestamp"),
                     }
-                    for e in exceptions[:10]
+                    for e in exceptions[:config.flink_max_exceptions]
                 ],
             }
             logger.info("Found %d exceptions for job %s", len(exceptions), job_id)
