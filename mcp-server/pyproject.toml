@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "streamops-mcp"
+version = "0.1.0"
+description = "MCP server exposing streaming infrastructure observability tools"
+requires-python = ">=3.11"
+dependencies = [
+    # MCP SDK for building tool servers
+    "mcp[cli]>=1.0.0",
+    # HTTP client for Flink REST API and Prometheus queries
+    "httpx>=0.27.0",
+    # Kafka consumer for event retrieval and log search
+    "confluent-kafka>=2.6.0",
+    # Settings management with env var support
+    "pydantic-settings>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "respx>=0.21.0",
+    "ruff>=0.7.0",
+]
+
+[project.scripts]
+streamops-mcp = "streamops_mcp.server:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/streamops_mcp"]
