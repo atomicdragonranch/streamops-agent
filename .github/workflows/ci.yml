@@ -49,7 +49,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: mcp-server
-        run: uv sync
+        run: uv sync --extra dev
 
       - name: Run tests
         working-directory: mcp-server
