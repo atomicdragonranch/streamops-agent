@@ -3,6 +3,9 @@
 When Claude returns a tool_use block, the executor looks up the tool name,
 calls the corresponding MCP tool function, and returns the result as a
 tool_result message for the next API turn.
+
+Cert ref: Domain 1 (tool execution in the agentic loop; tool_use -> execute
+-> tool_result -> next API turn).
 """
 
 import json

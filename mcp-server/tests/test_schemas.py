@@ -4,7 +4,14 @@ import json
 
 import pytest
 
-from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport, Severity
+from streamops_mcp.agent.schemas import (
+    ClaimRecord,
+    ConflictRecord,
+    DiagnosisReport,
+    IncidentReport,
+    Severity,
+    SourceRecord,
+)
 from streamops_mcp.agent.schemas.diagnosis import AffectedComponent, RootCause
 from streamops_mcp.agent.schemas.incident import RecommendedAction
 
@@ -178,3 +185,259 @@ class TestRecommendedAction:
 
         # Assert
         assert action.requires_downtime is False
+
+
+class TestSourceRecord:
+
+    def test_valid_source(self):
+        # Arrange + Act
+        source = SourceRecord(
+            source_id="src-001",
+            tool_name="query_flink_jobs",
+            retrieved_at="2026-06-18T15:00:00Z",
+            raw_output='{"jobs": [{"id": "abc123", "state": "RUNNING"}]}',
+        )
+
+        # Assert
+        assert source.source_id == "src-001"
+        assert source.tool_name == "query_flink_jobs"
+
+
+class TestClaimRecord:
+
+    def test_valid_claim(self):
+        # Arrange + Act
+        claim = ClaimRecord(
+            claim_id="C01",
+            text="Consumer lag is 45,000 on partition 2",
+            source_id="src-002",
+            confidence="high",
+        )
+
+        # Assert
+        assert claim.claim_id == "C01"
+        assert claim.source_id == "src-002"
+
+    def test_claim_references_source(self):
+        # Arrange
+        source = SourceRecord(
+            source_id="src-003",
+            tool_name="get_consumer_lag",
+            retrieved_at="2026-06-18T15:01:00Z",
+            raw_output="lag=45000",
+        )
+        claim = ClaimRecord(
+            claim_id="C02",
+            text="Consumer lag exceeds threshold",
+            source_id=source.source_id,
+            confidence="high",
+        )
+
+        # Assert
+        assert claim.source_id == source.source_id
+
+
+class TestConflictRecord:
+
+    def test_valid_conflict(self):
+        # Arrange + Act
+        conflict = ConflictRecord(
+            conflict_id="conf-001",
+            topic="Flink job health status",
+            claim_a_id="C01",
+            claim_b_id="C02",
+        )
+
+        # Assert
+        assert conflict.resolution == "unresolved"
+        assert conflict.conflict_id == "conf-001"
+
+    def test_conflict_defaults_to_unresolved(self):
+        # Arrange + Act
+        conflict = ConflictRecord(
+            conflict_id="conf-002",
+            topic="Consumer lag trend",
+            claim_a_id="C03",
+            claim_b_id="C04",
+        )
+
+        # Assert
+        assert conflict.resolution == "unresolved"
+        assert conflict.notes == ""
+
+    def test_conflict_with_notes(self):
+        # Arrange + Act
+        conflict = ConflictRecord(
+            conflict_id="conf-003",
+            topic="Checkpoint duration",
+            claim_a_id="C05",
+            claim_b_id="C06",
+            resolution="unresolved",
+            notes="Flink REST API reports success but Prometheus shows timeout; possible metric lag",
+        )
+
+        # Assert
+        assert "metric lag" in conflict.notes
+
+
+class TestDiagnosisWithAttribution:
+
+    def test_full_diagnosis_with_claims_and_sources(self):
+        # Arrange
+        data = {
+            "anomaly_type": "latency_spike",
+            "detected_at": "2026-06-18T15:00:00Z",
+            "sources": [
+                {
+                    "source_id": "src-001",
+                    "tool_name": "query_flink_jobs",
+                    "retrieved_at": "2026-06-18T15:00:01Z",
+                    "raw_output": '{"state": "RUNNING"}',
+                },
+                {
+                    "source_id": "src-002",
+                    "tool_name": "get_consumer_lag",
+                    "retrieved_at": "2026-06-18T15:00:02Z",
+                    "raw_output": "lag=45000",
+                },
+            ],
+            "claims": [
+                {
+                    "claim_id": "C01",
+                    "text": "Flink job is RUNNING but degraded",
+                    "source_id": "src-001",
+                    "confidence": "high",
+                },
+                {
+                    "claim_id": "C02",
+                    "text": "Consumer lag is 45,000 on partition 2",
+                    "source_id": "src-002",
+                    "confidence": "high",
+                },
+            ],
+            "conflicts": [],
+            "affected_components": [
+                {
+                    "name": "kafka-consumer",
+                    "role": "Ingests events",
+                    "status": "degraded",
+                    "evidence": "latency_ms=2340",
+                }
+            ],
+            "root_cause": {
+                "summary": "GC pressure causing processing delays",
+                "confidence": "high",
+                "reasoning": "Heap at 92%, correlated with latency spikes",
+            },
+            "tools_used": ["query_flink_jobs", "get_consumer_lag"],
+        }
+
+        # Act
+        report = DiagnosisReport.model_validate(data)
+
+        # Assert
+        assert len(report.sources) == 2
+        assert len(report.claims) == 2
+        assert report.claims[0].source_id == "src-001"
+        assert report.claims[1].source_id == "src-002"
+
+    def test_diagnosis_with_conflict(self):
+        # Arrange
+        data = {
+            "anomaly_type": "checkpoint_failure",
+            "detected_at": "2026-06-18T15:00:00Z",
+            "sources": [
+                {
+                    "source_id": "src-001",
+                    "tool_name": "get_checkpoint_stats",
+                    "retrieved_at": "2026-06-18T15:00:01Z",
+                    "raw_output": "status=COMPLETED",
+                },
+                {
+                    "source_id": "src-002",
+                    "tool_name": "query_metrics",
+                    "retrieved_at": "2026-06-18T15:00:02Z",
+                    "raw_output": "checkpoint_duration_ms=45000",
+                },
+            ],
+            "claims": [
+                {
+                    "claim_id": "C01",
+                    "text": "Checkpoint completed successfully",
+                    "source_id": "src-001",
+                    "confidence": "high",
+                },
+                {
+                    "claim_id": "C02",
+                    "text": "Checkpoint took 45s, exceeding 30s threshold",
+                    "source_id": "src-002",
+                    "confidence": "high",
+                },
+            ],
+            "conflicts": [
+                {
+                    "conflict_id": "conf-001",
+                    "topic": "Checkpoint health status",
+                    "claim_a_id": "C01",
+                    "claim_b_id": "C02",
+                    "resolution": "unresolved",
+                    "notes": "REST API reports success but duration exceeds threshold",
+                },
+            ],
+            "affected_components": [],
+            "root_cause": {
+                "summary": "Conflicting checkpoint signals require coordinator review",
+                "confidence": "low",
+                "reasoning": "Cannot determine without resolving conflicting data",
+            },
+            "tools_used": ["get_checkpoint_stats", "query_metrics"],
+        }
+
+        # Act
+        report = DiagnosisReport.model_validate(data)
+
+        # Assert
+        assert len(report.conflicts) == 1
+        assert report.conflicts[0].resolution == "unresolved"
+        assert report.conflicts[0].claim_a_id == "C01"
+        assert report.conflicts[0].claim_b_id == "C02"
+
+    def test_round_trip_with_attribution(self):
+        # Arrange
+        report = DiagnosisReport(
+            anomaly_type="backpressure",
+            detected_at="2026-06-18T15:00:00Z",
+            sources=[
+                SourceRecord(
+                    source_id="src-001",
+                    tool_name="query_flink_jobs",
+                    retrieved_at="2026-06-18T15:00:01Z",
+                    raw_output="backpressure=0.85",
+                ),
+            ],
+            claims=[
+                ClaimRecord(
+                    claim_id="C01",
+                    text="Backpressure ratio is 0.85",
+                    source_id="src-001",
+                    confidence="high",
+                ),
+            ],
+            conflicts=[],
+            affected_components=[],
+            root_cause=RootCause(
+                summary="Slow sink",
+                confidence="high",
+                reasoning="Backpressure on sink operator",
+            ),
+            tools_used=["query_flink_jobs"],
+        )
+
+        # Act
+        json_str = report.model_dump_json()
+        restored = DiagnosisReport.model_validate_json(json_str)
+
+        # Assert
+        assert len(restored.sources) == 1
+        assert len(restored.claims) == 1
+        assert restored.claims[0].source_id == restored.sources[0].source_id

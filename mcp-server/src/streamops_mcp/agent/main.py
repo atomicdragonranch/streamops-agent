@@ -6,6 +6,9 @@ Runs the monitoring loop on a configurable interval. Each cycle:
 3. Spawns diagnostic + report sub-agents (multi-agent mode)
 4. Escalates incidents by severity
 
+Cert ref: Domain 1 (coordinator-driven agentic loop with configurable interval).
+Cert ref: Domain 1.3 (multi-agent vs single-agent mode selection).
+
 Usage:
     python -m streamops_mcp.agent.main
     python -m streamops_mcp.agent.main --single-agent --interval 30

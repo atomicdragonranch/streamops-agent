@@ -7,9 +7,9 @@ The loop is driven by Claude's stop_reason:
   - "tool_use": Claude wants to call a tool, keep going
   - "end_turn": Claude is done, check if there's an incident to report
 
-This is the core pattern from the Claude Certified Architect exam (Domain 1):
-the coordinator owns the loop, decomposes problems, delegates to specialists,
-and aggregates results.
+Cert ref: Domain 1 (agentic loop, tool use, coordinator pattern).
+Cert ref: Domain 1.3 (sub-agent invocation, context injection, conflict escalation).
+Cert ref: Domain 1.7 (session state: sub-agents start blank, coordinator injects all context).
 """
 
 import json
@@ -44,7 +44,12 @@ DIAGNOSTIC_SYSTEM_PROMPT = """You are a streaming infrastructure diagnostic spec
 Your job:
 1. Use the available tools to investigate the root cause
 2. Check related components for cascading effects
-3. Produce a structured DiagnosisReport
+3. Produce a structured DiagnosisReport with full claim-source attribution
+
+Attribution rules (critical):
+- For every tool you call, create a SourceRecord with a unique source_id, the tool name, timestamp, and the raw output.
+- For every factual finding, create a ClaimRecord with a unique claim_id, the finding text, and the source_id of the tool that produced it.
+- If two sources report contradictory data, create a ConflictRecord referencing both claim IDs. Set resolution to "unresolved". Do NOT silently pick one side; the coordinator will decide.
 
 Be thorough. Check at least 3 different data sources before concluding. Correlation is not causation; look for the actual root cause, not just symptoms.
 
@@ -57,6 +62,7 @@ Your job:
 2. Write a clear executive summary
 3. Recommend specific, actionable remediation steps
 4. Note what to monitor after remediation
+5. If the diagnosis contains unresolved conflicts, flag them prominently in the summary so the on-call team is aware of contradictory data
 
 You MUST respond with a valid JSON object matching the IncidentReport schema."""
 
@@ -93,6 +99,18 @@ class MonitorAgent:
             diagnosis = self._extract_diagnosis_from_detection(detection)
             report = await self._spawn_report_agent(diagnosis)
 
+        if diagnosis.conflicts:
+            logger.warning(
+                "Coordinator received %d unresolved conflict(s) from Diagnostic Agent",
+                len(diagnosis.conflicts),
+            )
+            for conflict in diagnosis.conflicts:
+                logger.warning(
+                    "Conflict %s [%s]: claims %s vs %s",
+                    conflict.conflict_id, conflict.topic,
+                    conflict.claim_a_id, conflict.claim_b_id,
+                )
+
         await escalate(report)
         return report
 
@@ -100,6 +118,9 @@ class MonitorAgent:
         """Run the agentic loop to poll infrastructure and detect anomalies.
 
         Returns the assistant's final text if anomalies were found, None if healthy.
+
+        Cert ref: Domain 1 (agentic loop driven by stop_reason; tool_use = continue,
+        end_turn = done).
         """
         messages = [{"role": "user", "content": "Run a health check on the streaming infrastructure. Check Flink jobs, consumer lag, and recent events. Report any anomalies you find."}]
 
@@ -155,7 +176,11 @@ class MonitorAgent:
         """Spawn a Diagnostic sub-agent with scoped context and tools.
 
         The sub-agent starts with a blank context. All relevant information
-        must be injected explicitly via the prompt.
+        must be injected explicitly via the prompt (not inherited from the
+        coordinator's conversation history).
+
+        Cert ref: Domain 1.3 (sub-agent starts blank, structured context injection).
+        Cert ref: Domain 1.7 (context isolation between coordinator and sub-agents).
         """
         logger.info("Spawning Diagnostic Agent")
 
@@ -211,6 +236,10 @@ Use the available tools to determine the root cause. Respond with a JSON object 
         """Spawn a Report sub-agent to produce the final incident report.
 
         No tools needed; the Report agent synthesizes from the diagnosis.
+        The full DiagnosisReport (including sources, claims, and conflicts)
+        is passed as structured JSON, preserving attribution end-to-end.
+
+        Cert ref: Domain 1.3 (structured context passing with claim-source attribution).
         """
         logger.info("Spawning Report Agent")
 

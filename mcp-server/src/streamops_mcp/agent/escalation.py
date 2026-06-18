@@ -10,6 +10,9 @@ The human-in-the-loop pattern is a key exam concept: CRITICAL incidents
 require a human to acknowledge before the system takes any remediation
 action. This prevents autonomous systems from making things worse during
 a severe outage.
+
+Cert ref: Domain 1 (escalation routing, severity classification).
+Cert ref: Domain 1 (human-in-the-loop for high-stakes autonomous actions).
 """
 
 import logging

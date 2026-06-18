@@ -4,9 +4,68 @@ This Pydantic model constrains Claude's output when investigating an anomaly.
 The agent must produce a structured diagnosis, not free-form text. This is
 the "structured output" pattern from the Claude API: pass the JSON schema
 in the tool definition, and the model is forced to conform to it.
+
+Cert ref: Domain 1 (structured output), Domain 1.3 (claim-source attribution,
+conflict handling in multi-agent pipelines).
 """
 
 from pydantic import BaseModel, Field
+
+
+class SourceRecord(BaseModel):
+    """A data source referenced by one or more claims.
+
+    Every tool call or data point that contributes to the diagnosis gets a
+    unique source_id. Claims reference these IDs so any finding can be traced
+    back to the tool and data that produced it.
+
+    Cert ref: Domain 1.3 (attribution preservation across sub-agents).
+    """
+
+    source_id: str = Field(description="Unique identifier for this source (e.g., 'src-001')")
+    tool_name: str = Field(description="MCP tool that produced this data (e.g., 'query_flink_jobs')")
+    retrieved_at: str = Field(description="ISO-8601 timestamp when the data was retrieved")
+    raw_output: str = Field(description="Verbatim or summarized tool output")
+
+
+class ClaimRecord(BaseModel):
+    """A single factual claim paired with its source.
+
+    Every diagnostic finding is recorded as a claim explicitly linked to
+    the source_id that produced it. Downstream agents (and humans) can
+    verify any claim back to its origin without re-running tools.
+
+    Cert ref: Domain 1.3 (claim-source mappings for sub-agent context passing).
+    """
+
+    claim_id: str = Field(description="Unique identifier for this claim (e.g., 'C01')")
+    text: str = Field(description="The factual claim (e.g., 'Consumer lag is 45,000 on partition 2')")
+    source_id: str = Field(description="References SourceRecord.source_id that produced this claim")
+    confidence: str = Field(description="Confidence level: high, medium, low")
+
+
+class ConflictRecord(BaseModel):
+    """Records contradictory data from different sources.
+
+    When two sources report conflicting information, the sub-agent must
+    annotate both claims, mark the conflict as unresolved, and escalate
+    to the coordinator. Sub-agents must never silently resolve conflicts.
+
+    Cert ref: Domain 1.3 (conflict handling, escalation to coordinator).
+    """
+
+    conflict_id: str = Field(description="Unique identifier (e.g., 'conf-001')")
+    topic: str = Field(description="What the conflicting sources disagree about")
+    claim_a_id: str = Field(description="First claim ID involved in the conflict")
+    claim_b_id: str = Field(description="Second claim ID involved in the conflict")
+    resolution: str = Field(
+        default="unresolved",
+        description="Resolution state: unresolved (escalate to coordinator), resolved_a, resolved_b",
+    )
+    notes: str = Field(
+        default="",
+        description="Additional context about the conflict for the coordinator",
+    )
 
 
 class AffectedComponent(BaseModel):
@@ -34,11 +93,28 @@ class DiagnosisReport(BaseModel):
     """Complete diagnosis of a streaming pipeline anomaly.
 
     The Diagnostic Agent produces this after investigating with MCP tools.
-    It becomes the input context for the Report Agent.
+    It becomes the input context for the Report Agent. All claims are paired
+    with sources for full attribution traceability, and any conflicting data
+    is annotated for coordinator review.
+
+    Cert ref: Domain 1 (structured output), Domain 1.3 (claim-source mappings,
+    conflict escalation).
     """
 
     anomaly_type: str = Field(description="Category: latency_spike, throughput_drop, backpressure, checkpoint_failure, memory_pressure, error_burst")
     detected_at: str = Field(description="ISO-8601 timestamp when the anomaly was first detected")
+    sources: list[SourceRecord] = Field(
+        default_factory=list,
+        description="All data sources consulted during investigation",
+    )
+    claims: list[ClaimRecord] = Field(
+        default_factory=list,
+        description="Factual claims, each linked to a source_id for attribution",
+    )
+    conflicts: list[ConflictRecord] = Field(
+        default_factory=list,
+        description="Contradictory findings that require coordinator review",
+    )
     affected_components: list[AffectedComponent] = Field(
         description="Components involved in or affected by the anomaly"
     )
