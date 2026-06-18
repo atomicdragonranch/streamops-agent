@@ -333,7 +333,7 @@ docker exec streamops-flink-jm bash -c "mkdir -p /tmp/flink-checkpoints && chmod
 docker exec streamops-flink-tm bash -c "mkdir -p /tmp/flink-checkpoints && chmod 777 /tmp/flink-checkpoints"
 ```
 
-Then resubmit the job.
+Then resubmit the job (see step 3 above).
 
 **Flink job restarts with "Connection to node localhost:9092 could not be established"**
 
