@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!--
+        Flink provides its own logging config at runtime. This file is used during
+        local testing and IDE runs. The Flink cluster's log4j config takes precedence
+        when the job is deployed.
+    -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="${PROCESSOR_LOG_LEVEL:-INFO}">
+        <appender-ref ref="CONSOLE" />
+    </root>
+
+    <!-- Flink internals are noisy; only show warnings -->
+    <logger name="org.apache.flink" level="WARN" />
+    <logger name="org.apache.kafka" level="WARN" />
+
+    <!-- Our operator logging at DEBUG when needed -->
+    <logger name="com.streamops.processor" level="${PROCESSOR_LOG_LEVEL:-INFO}" />
+</configuration>
