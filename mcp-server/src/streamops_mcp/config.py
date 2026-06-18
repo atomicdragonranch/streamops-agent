@@ -49,7 +49,7 @@ class StreamOpsConfig(BaseSettings):
 
     # Agent configuration
     agent_model: str = "claude-sonnet-4-6"
-    agent_max_tokens: int = 4096
+    agent_max_tokens: int = 8192
     agent_max_tool_rounds: int = 15
     agent_monitor_interval: int = 60
 
