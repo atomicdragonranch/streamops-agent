@@ -56,14 +56,20 @@ services:
       echo 'Topics created successfully'
       "
 
-  # --- Flink ---
-  # JobManager: coordinates the cluster, accepts job submissions
+  # --- Flink (Application Mode) ---
+  # The job JAR is baked into the image. The JobManager runs the job on startup
+  # instead of waiting for external submission.
   flink-jobmanager:
-    image: flink:1.20-java17
+    build:
+      context: java/stream-processor
+      dockerfile: Dockerfile
     container_name: streamops-flink-jm
     ports:
       - "8081:8081"
-    command: jobmanager
+    command: standalone-job
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
     environment:
       KAFKA_BOOTSTRAP: kafka:29092
       FLINK_PROPERTIES: |
@@ -79,9 +85,10 @@ services:
       - flink-checkpoints:/tmp/flink-checkpoints
       - flink-savepoints:/tmp/flink-savepoints
 
-  # TaskManager: executes the actual operators (1 is enough for local dev)
   flink-taskmanager:
-    image: flink:1.20-java17
+    build:
+      context: java/stream-processor
+      dockerfile: Dockerfile
     container_name: streamops-flink-tm
     depends_on:
       - flink-jobmanager
