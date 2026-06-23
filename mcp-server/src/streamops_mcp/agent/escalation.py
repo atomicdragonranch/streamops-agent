@@ -49,12 +49,16 @@ async def _handle_low(report: IncidentReport) -> None:
 async def _handle_medium(report: IncidentReport) -> None:
     logger.warning("[MEDIUM] %s: %s", report.title, report.summary)
     _print_report_summary(report)
+    if report.requires_human_approval:
+        print("NOTE: Recommended actions require human approval before execution.")
 
 
 async def _handle_high(report: IncidentReport) -> None:
     logger.error("[HIGH] %s: %s", report.title, report.summary)
     _print_report_summary(report)
     _print_recommended_actions(report)
+    if report.requires_human_approval:
+        print("NOTE: Recommended actions require human approval before execution.")
 
 
 async def _handle_critical(report: IncidentReport) -> bool | None:

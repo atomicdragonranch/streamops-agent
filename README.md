@@ -368,6 +368,17 @@ Another application is using the Grafana port. Edit `docker-compose.yml` and cha
 
 This is normal during warm-up. The AnomalyDetector uses exponential moving averages (EMA) that need several data points before triggering. Run the simulator for at least 30 seconds with an anomaly scenario, then check the `stream-alerts` topic in Kafka UI.
 
+## Draft-Only Output Contract
+
+StreamOps Agent operates under a strict **recommend, never execute** policy. The agent diagnoses issues and recommends remediation actions, but it never auto-remediates. It does not restart Flink jobs, scale resources, modify configurations, or take any action that changes infrastructure state.
+
+All recommended actions require human review and approval before execution. This is enforced at multiple levels:
+
+- **System prompts**: every agent (monitor, diagnostic, report) includes an explicit draft-only instruction
+- **Schema**: `IncidentReport.requires_human_approval` defaults to `true` for all reports
+- **Escalation engine**: CRITICAL incidents require interactive approval; all other severities log the recommendation for human review
+- **Audit trail**: every incident and its human approval status is persisted to `data/audit/incidents.jsonl`
+
 ## Architectural Patterns
 
 | Pattern | Implementation |
@@ -379,6 +390,12 @@ This is normal during warm-up. The AnomalyDetector uses exponential moving avera
 | Sub-agent context injection | `monitor.py:_spawn_diagnostic_agent()` |
 | Claim-source attribution | `schemas/diagnosis.py:ClaimRecord + SourceRecord` |
 | Conflict annotation + escalation | `schemas/diagnosis.py:ConflictRecord` |
+| Confidence scoring | `schemas/diagnosis.py:Confidence` enum on every claim |
 | Session isolation (blank sub-agents) | `monitor.py:_spawn_*_agent()` |
 | Human-in-the-loop | `escalation.py:_handle_critical()` |
+| Draft-only output contract | All prompts, schema default, escalation enforcement |
+| Handoff validation | `schemas/handoff.py` typed Pydantic payloads at agent boundaries |
+| Runbook-as-skill | `prompts/runbooks/*.md` injected into diagnostic context |
+| Incident audit trail | `audit.py` JSON Lines with queryable filters |
+| Secret scanning | `.github/workflows/secret-scan.yml` TruffleHog CI |
 | Config externalization | `config.py`, `application.properties` |

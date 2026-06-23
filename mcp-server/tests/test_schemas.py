@@ -629,6 +629,59 @@ class TestIncidentReportLowConfidence:
         assert report.low_confidence_claims == []
 
 
+class TestDraftOnlyContract:
+
+    def test_requires_human_approval_defaults_true(self):
+        # Arrange
+        data = {
+            "incident_id": "inc-001",
+            "title": "Test incident",
+            "severity": "HIGH",
+            "summary": "Test",
+            "anomaly_type": "test",
+            "root_cause": "Test",
+            "affected_components": [],
+            "timeline": [],
+            "recommended_actions": [],
+            "monitoring_notes": "None",
+        }
+
+        # Act
+        report = IncidentReport.model_validate(data)
+
+        # Assert
+        assert report.requires_human_approval is True
+
+    def test_requires_human_approval_explicit_false(self):
+        # Arrange
+        data = {
+            "incident_id": "inc-002",
+            "title": "Monitoring only",
+            "severity": "LOW",
+            "summary": "Passive monitoring, no action needed",
+            "anomaly_type": "none",
+            "root_cause": "N/A",
+            "affected_components": [],
+            "timeline": [],
+            "recommended_actions": [],
+            "requires_human_approval": False,
+            "monitoring_notes": "None",
+        }
+
+        # Act
+        report = IncidentReport.model_validate(data)
+
+        # Assert
+        assert report.requires_human_approval is False
+
+    def test_requires_human_approval_in_json_schema(self):
+        # Act
+        schema = IncidentReport.model_json_schema()
+
+        # Assert
+        assert "requires_human_approval" in str(schema)
+
+
 class TestMonitorToDiagnosticHandoff:
 
     def test_valid_handoff(self):

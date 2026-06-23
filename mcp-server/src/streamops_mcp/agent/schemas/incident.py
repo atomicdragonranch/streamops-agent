@@ -51,6 +51,10 @@ class IncidentReport(BaseModel):
         default_factory=list,
         description="Claims with LOW or UNSOURCED confidence, surfaced for operator awareness",
     )
+    requires_human_approval: bool = Field(
+        default=True,
+        description="Whether recommended actions require human approval before execution. True for all actions beyond passive monitoring.",
+    )
     monitoring_notes: str = Field(
         description="What to watch after remediation to confirm resolution"
     )

@@ -43,6 +43,7 @@ class AuditLogger:
             "affected_components": report.affected_components,
             "recommended_actions": [a.model_dump() for a in report.recommended_actions],
             "low_confidence_claims": report.low_confidence_claims,
+            "requires_human_approval": report.requires_human_approval,
             "human_approved": human_approved,
         }
 
