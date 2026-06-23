@@ -11,7 +11,14 @@ import httpx
 import pytest
 
 from streamops_mcp.agent.monitor import MonitorAgent
-from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport, Severity
+from streamops_mcp.agent.schemas import (
+    ClaimRecord,
+    Confidence,
+    DiagnosisReport,
+    IncidentReport,
+    Severity,
+    SourceRecord,
+)
 
 
 def _fake_response(status_code: int) -> httpx.Response:
@@ -355,3 +362,129 @@ class TestFallbackReport:
         assert isinstance(result, IncidentReport)
         assert result.affected_components == []
         assert result.recommended_actions == []
+
+
+def _make_diagnosis_with_claims(claim_confidences: list[Confidence]) -> DiagnosisReport:
+    """Helper: build a DiagnosisReport with claims at specified confidence levels."""
+    sources = [
+        SourceRecord(
+            source_id="src-001",
+            tool_name="query_flink_jobs",
+            retrieved_at="2026-06-23T12:00:00Z",
+            raw_output="{}",
+        ),
+    ]
+    claims = [
+        ClaimRecord(
+            claim_id=f"C{i:02d}",
+            text=f"Claim {i} at {conf.value}",
+            source_id="src-001",
+            confidence=conf,
+        )
+        for i, conf in enumerate(claim_confidences, start=1)
+    ]
+    return DiagnosisReport(
+        anomaly_type="latency_spike",
+        detected_at="2026-06-23T12:00:00Z",
+        sources=sources,
+        claims=claims,
+        affected_components=[],
+        root_cause={"summary": "test", "confidence": "high", "reasoning": "test"},
+        tools_used=["query_flink_jobs"],
+    )
+
+
+class TestConfidenceDistribution:
+
+    def test_logs_distribution(self, agent, caplog):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([
+            Confidence.HIGH, Confidence.HIGH, Confidence.MEDIUM, Confidence.LOW,
+        ])
+
+        # Act
+        with caplog.at_level("INFO", logger="streamops-mcp.monitor"):
+            MonitorAgent._log_confidence_distribution(diagnosis)
+
+        # Assert
+        assert "2 HIGH" in caplog.text
+        assert "1 MEDIUM" in caplog.text
+        assert "1 LOW" in caplog.text
+        assert "0 UNSOURCED" in caplog.text
+
+
+class TestAllClaimsLowConfidence:
+
+    def test_all_low_returns_true(self):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([Confidence.LOW, Confidence.LOW])
+
+        # Act / Assert
+        assert MonitorAgent._all_claims_low_confidence(diagnosis) is True
+
+    def test_all_unsourced_returns_true(self):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([Confidence.UNSOURCED])
+
+        # Act / Assert
+        assert MonitorAgent._all_claims_low_confidence(diagnosis) is True
+
+    def test_mixed_low_unsourced_returns_true(self):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([Confidence.LOW, Confidence.UNSOURCED])
+
+        # Act / Assert
+        assert MonitorAgent._all_claims_low_confidence(diagnosis) is True
+
+    def test_one_medium_returns_false(self):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([
+            Confidence.LOW, Confidence.MEDIUM, Confidence.UNSOURCED,
+        ])
+
+        # Act / Assert
+        assert MonitorAgent._all_claims_low_confidence(diagnosis) is False
+
+    def test_no_claims_returns_false(self):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([])
+
+        # Act / Assert
+        assert MonitorAgent._all_claims_low_confidence(diagnosis) is False
+
+
+class TestExtractLowConfidenceClaims:
+
+    def test_extracts_low_and_unsourced(self):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([
+            Confidence.HIGH, Confidence.LOW, Confidence.MEDIUM, Confidence.UNSOURCED,
+        ])
+
+        # Act
+        result = MonitorAgent._extract_low_confidence_claims(diagnosis)
+
+        # Assert
+        assert len(result) == 2
+        assert "Claim 2 at LOW" in result
+        assert "Claim 4 at UNSOURCED" in result
+
+    def test_returns_empty_when_all_high(self):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([Confidence.HIGH, Confidence.HIGH])
+
+        # Act
+        result = MonitorAgent._extract_low_confidence_claims(diagnosis)
+
+        # Assert
+        assert result == []
+
+    def test_returns_empty_when_no_claims(self):
+        # Arrange
+        diagnosis = _make_diagnosis_with_claims([])
+
+        # Act
+        result = MonitorAgent._extract_low_confidence_claims(diagnosis)
+
+        # Assert
+        assert result == []

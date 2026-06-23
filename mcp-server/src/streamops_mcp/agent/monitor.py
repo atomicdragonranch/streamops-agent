@@ -24,6 +24,7 @@ import anthropic
 from streamops_mcp.agent.executor import execute_tool
 from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS, REPORT_TOOLS
 from streamops_mcp.agent.schemas import (
+    Confidence,
     DiagnosisReport,
     DiagnosticToReportHandoff,
     IncidentReport,
@@ -119,6 +120,18 @@ class MonitorAgent:
                 )
                 return None
 
+            self._log_confidence_distribution(diagnosis)
+
+            if self._all_claims_low_confidence(diagnosis):
+                logger.warning(
+                    "All %d claims are LOW or UNSOURCED confidence; "
+                    "downgrading to warning-level log, skipping report agent",
+                    len(diagnosis.claims),
+                )
+                return None
+
+            low_claims = self._extract_low_confidence_claims(diagnosis)
+
             try:
                 report = await self._retry_subagent(
                     "Report Agent",
@@ -129,6 +142,9 @@ class MonitorAgent:
                     "Report Agent failed after retries, producing fallback report: %s", exc,
                 )
                 report = self._fallback_report(diagnosis)
+
+            if low_claims and not report.low_confidence_claims:
+                report.low_confidence_claims = low_claims
         else:
             diagnosis = self._extract_diagnosis_from_detection(detection)
             report = await self._spawn_report_agent(diagnosis)
@@ -163,6 +179,29 @@ class MonitorAgent:
             recommended_actions=[],
             monitoring_notes="Report agent was unavailable; review diagnosis data directly",
         )
+
+    @staticmethod
+    def _log_confidence_distribution(diagnosis: DiagnosisReport) -> None:
+        """Log a summary of claim confidence levels for coordinator awareness."""
+        counts = {level: 0 for level in Confidence}
+        for claim in diagnosis.claims:
+            counts[claim.confidence] = counts.get(claim.confidence, 0) + 1
+        summary = ", ".join(f"{counts[level]} {level.value}" for level in Confidence)
+        logger.info("Claim confidence distribution: %s", summary)
+
+    @staticmethod
+    def _all_claims_low_confidence(diagnosis: DiagnosisReport) -> bool:
+        """Return True if every claim is LOW or UNSOURCED (or there are no claims)."""
+        if not diagnosis.claims:
+            return False
+        low_levels = {Confidence.LOW, Confidence.UNSOURCED}
+        return all(c.confidence in low_levels for c in diagnosis.claims)
+
+    @staticmethod
+    def _extract_low_confidence_claims(diagnosis: DiagnosisReport) -> list[str]:
+        """Extract claim text for LOW and UNSOURCED claims."""
+        low_levels = {Confidence.LOW, Confidence.UNSOURCED}
+        return [c.text for c in diagnosis.claims if c.confidence in low_levels]
 
     async def _detect_anomalies(self) -> str | None:
         """Run the agentic loop to poll infrastructure and detect anomalies.
