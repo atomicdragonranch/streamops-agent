@@ -13,14 +13,22 @@ worse during a severe outage.
 
 import logging
 
-from streamops_mcp.agent.schemas import IncidentReport, Severity
+from streamops_mcp.agent.audit import AuditLogger
+from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport, Severity
 
 logger = logging.getLogger("streamops-mcp.escalation")
 
+_audit = AuditLogger()
 
-async def escalate(report: IncidentReport) -> None:
+
+async def escalate(
+    report: IncidentReport,
+    diagnosis: DiagnosisReport | None = None,
+) -> None:
     """Route an incident report through the escalation chain."""
     logger.info("Escalating incident '%s' (severity=%s)", report.title, report.severity.value)
+
+    human_approved = None
 
     if report.severity == Severity.LOW:
         await _handle_low(report)
@@ -29,7 +37,9 @@ async def escalate(report: IncidentReport) -> None:
     elif report.severity == Severity.HIGH:
         await _handle_high(report)
     elif report.severity == Severity.CRITICAL:
-        await _handle_critical(report)
+        human_approved = await _handle_critical(report)
+
+    _audit.log_incident(report, diagnosis=diagnosis, human_approved=human_approved)
 
 
 async def _handle_low(report: IncidentReport) -> None:
@@ -47,8 +57,11 @@ async def _handle_high(report: IncidentReport) -> None:
     _print_recommended_actions(report)
 
 
-async def _handle_critical(report: IncidentReport) -> None:
-    """CRITICAL: human-in-the-loop. Pause for confirmation."""
+async def _handle_critical(report: IncidentReport) -> bool | None:
+    """CRITICAL: human-in-the-loop. Pause for confirmation.
+
+    Returns True if approved, False if rejected, None if no input available.
+    """
     logger.critical("[CRITICAL] %s: %s", report.title, report.summary)
     _print_report_summary(report)
     _print_recommended_actions(report)
@@ -67,18 +80,19 @@ async def _handle_critical(report: IncidentReport) -> None:
     print(f"\nMonitoring: {report.monitoring_notes}")
     print("\nApprove recommended actions? (y/n): ", end="", flush=True)
 
-    # In a real system this would be an async event or webhook callback.
-    # For the CLI demo, we use stdin.
     try:
         response = input()
         if response.strip().lower() in ("y", "yes"):
             logger.info("Human approved actions for incident %s", report.incident_id)
             print("Actions approved. Proceeding with remediation recommendations.")
+            return True
         else:
             logger.info("Human rejected actions for incident %s", report.incident_id)
             print("Actions rejected. Incident logged for manual review.")
+            return False
     except EOFError:
         logger.warning("No human input available, logging for manual review")
+        return None
 
 
 def _print_report_summary(report: IncidentReport) -> None:

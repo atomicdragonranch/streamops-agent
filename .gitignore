@@ -44,6 +44,9 @@ Thumbs.db
 # Working artifacts (local only)
 claude-artifacts/
 
+# Audit trail (runtime data)
+data/audit/
+
 # Demo output (live runs only; examples/ is tracked)
 demo-output/*.json
 demo-output/*_incident.json

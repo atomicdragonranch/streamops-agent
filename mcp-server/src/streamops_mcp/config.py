@@ -55,6 +55,9 @@ class StreamOpsConfig(BaseSettings):
     agent_monitor_interval: int = 60
     agent_handoff_max_context_chars: int = 50_000
 
+    # Audit trail
+    audit_log_path: str = "data/audit/incidents.jsonl"
+
     model_config = {"env_prefix": "STREAMOPS_"}
 
 

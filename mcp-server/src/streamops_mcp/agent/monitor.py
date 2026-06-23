@@ -82,7 +82,7 @@ class MonitorAgent:
                     conflict.claim_a_id, conflict.claim_b_id,
                 )
 
-        await escalate(report)
+        await escalate(report, diagnosis=diagnosis)
         return report
 
     async def _detect_anomalies(self) -> str | None:
