@@ -23,47 +23,13 @@ from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS, REPORT_TOOLS
 from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport, Severity
 from streamops_mcp.agent.escalation import escalate
 from streamops_mcp.config import config
+from streamops_mcp.prompts import load_prompt
 
 logger = logging.getLogger("streamops-mcp.monitor")
 
-MONITOR_SYSTEM_PROMPT = """You are a streaming infrastructure operations agent monitoring an Apache Flink + Kafka pipeline.
-
-Your job:
-1. Poll the infrastructure using the available tools
-2. Detect anomalies (latency spikes, throughput drops, backpressure, checkpoint failures, memory pressure, error bursts)
-3. When you detect an anomaly, investigate it thoroughly using multiple tools
-4. Produce a structured diagnosis
-
-Start by checking: Flink job status, consumer lag, and recent events. If everything looks healthy, say so briefly and stop. If you detect a problem, investigate it using all relevant tools before concluding.
-
-Be specific. Cite actual metric values, not vague descriptions. "Latency is 2,340ms (threshold: 200ms)" is useful. "Latency is high" is not."""
-
-DIAGNOSTIC_SYSTEM_PROMPT = """You are a streaming infrastructure diagnostic specialist. You have been given an anomaly detected by the monitoring system.
-
-Your job:
-1. Use the available tools to investigate the root cause
-2. Check related components for cascading effects
-3. Produce a structured DiagnosisReport with full claim-source attribution
-
-Attribution rules (critical):
-- For every tool you call, create a SourceRecord with a unique source_id, the tool name, timestamp, and the raw output.
-- For every factual finding, create a ClaimRecord with a unique claim_id, the finding text, and the source_id of the tool that produced it.
-- If two sources report contradictory data, create a ConflictRecord referencing both claim IDs. Set resolution to "unresolved". Do NOT silently pick one side; the coordinator will decide.
-
-Be thorough. Check at least 3 different data sources before concluding. Correlation is not causation; look for the actual root cause, not just symptoms.
-
-You MUST respond with a valid JSON object matching the DiagnosisReport schema."""
-
-REPORT_SYSTEM_PROMPT = """You are a streaming infrastructure incident reporter. You receive a diagnosis and produce a structured incident report for the on-call team.
-
-Your job:
-1. Classify severity based on impact (LOW: cosmetic, MEDIUM: degraded, HIGH: SLA at risk, CRITICAL: data loss or complete outage)
-2. Write a clear executive summary
-3. Recommend specific, actionable remediation steps
-4. Note what to monitor after remediation
-5. If the diagnosis contains unresolved conflicts, flag them prominently in the summary so the on-call team is aware of contradictory data
-
-You MUST respond with a valid JSON object matching the IncidentReport schema."""
+MONITOR_SYSTEM_PROMPT = load_prompt("monitor")
+DIAGNOSTIC_SYSTEM_PROMPT = load_prompt("diagnostic")
+REPORT_SYSTEM_PROMPT = load_prompt("report")
 
 
 class MonitorAgent:
@@ -131,7 +97,6 @@ class MonitorAgent:
                 messages=messages,
             )
 
-            # Process response content blocks
             assistant_text = ""
             tool_calls = []
 
@@ -143,7 +108,6 @@ class MonitorAgent:
 
             messages.append({"role": "assistant", "content": response.content})
 
-            # stop_reason drives the loop
             if response.stop_reason == "end_turn":
                 logger.info("Detection complete after %d rounds", round_num + 1)
                 if self._mentions_anomaly(assistant_text):

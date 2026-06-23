@@ -20,6 +20,8 @@ dependencies = [
     "protobuf>=5.0.0",
     # Settings management with env var support
     "pydantic-settings>=2.0.0",
+    # YAML parsing for prompt frontmatter
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
