@@ -29,7 +29,7 @@ from streamops_mcp.agent.schemas import (
 )
 from streamops_mcp.agent.escalation import escalate
 from streamops_mcp.config import config
-from streamops_mcp.prompts import load_prompt
+from streamops_mcp.prompts import list_runbooks, load_prompt, load_runbook
 
 logger = logging.getLogger("streamops-mcp.monitor")
 
@@ -160,6 +160,11 @@ class MonitorAgent:
             len(handoff.anomaly_context),
         )
 
+        system_prompt = DIAGNOSTIC_SYSTEM_PROMPT
+        runbook_section = self._resolve_runbooks(handoff.anomaly_context)
+        if runbook_section:
+            system_prompt = system_prompt + "\n\n" + runbook_section
+
         messages = [{
             "role": "user",
             "content": f"""Investigate the following anomaly detected by the monitoring system:
@@ -178,7 +183,7 @@ Use the available tools to determine the root cause. Respond with a JSON object 
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=config.agent_max_tokens,
-                system=DIAGNOSTIC_SYSTEM_PROMPT,
+                system=system_prompt,
                 tools=DIAGNOSTIC_TOOLS,
                 messages=messages,
             )
@@ -249,6 +254,31 @@ Respond with a JSON object matching the IncidentReport schema:
 
         text = "".join(b.text for b in response.content if b.type == "text")
         return self._parse_incident(text, diagnosis)
+
+    @staticmethod
+    def _resolve_runbooks(anomaly_context: str) -> str:
+        """Match anomaly context against available runbooks and return combined content."""
+        context_lower = anomaly_context.lower()
+        keyword_map = {
+            "latency_spike": ["latency", "slow", "delay", "processing time"],
+            "checkpoint_failure": ["checkpoint", "savepoint", "state snapshot"],
+            "throughput_drop": ["lag", "throughput", "consumer lag", "behind"],
+            "backpressure": ["backpressure", "back pressure", "saturated"],
+            "error_burst": ["error", "exception", "out of order", "late event"],
+        }
+
+        matched = []
+        for anomaly_type, keywords in keyword_map.items():
+            if any(kw in context_lower for kw in keywords):
+                content = load_runbook(anomaly_type)
+                if content:
+                    matched.append(f"## Runbook: {anomaly_type}\n\n{content}")
+
+        if not matched:
+            return ""
+
+        logger.info("Injecting %d runbook(s) into diagnostic context", len(matched))
+        return "---\nRelevant runbooks for this investigation:\n\n" + "\n\n".join(matched)
 
     def _mentions_anomaly(self, text: str) -> bool:
         """Simple heuristic: does the text suggest an anomaly was found?"""

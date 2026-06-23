@@ -49,6 +49,7 @@ class StreamOpsConfig(BaseSettings):
 
     # Agent configuration
     agent_prompt_dir: str = ""
+    agent_runbook_dir: str = ""
     agent_model: str = "claude-sonnet-4-6"
     agent_max_tokens: int = 8192
     agent_max_tool_rounds: int = 15
