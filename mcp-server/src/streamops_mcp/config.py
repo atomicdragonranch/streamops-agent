@@ -56,6 +56,9 @@ class StreamOpsConfig(BaseSettings):
     agent_monitor_interval: int = 60
     agent_handoff_max_context_chars: int = 50_000
 
+    # Input sanitization
+    agent_sanitize_max_output_chars: int = 20_000
+
     # Audit trail
     audit_log_path: str = "data/audit/incidents.jsonl"
 
