@@ -47,6 +47,10 @@ class IncidentReport(BaseModel):
     recommended_actions: list[RecommendedAction] = Field(
         description="Ordered list of recommended remediation steps"
     )
+    low_confidence_claims: list[str] = Field(
+        default_factory=list,
+        description="Claims with LOW or UNSOURCED confidence, surfaced for operator awareness",
+    )
     monitoring_notes: str = Field(
         description="What to watch after remediation to confirm resolution"
     )

@@ -5,7 +5,18 @@ The agent must produce a structured diagnosis with claim-source attribution,
 not free-form text.
 """
 
+from enum import Enum
+
 from pydantic import BaseModel, Field
+
+
+class Confidence(str, Enum):
+    """Confidence level for a diagnostic claim based on corroborating evidence."""
+
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    UNSOURCED = "UNSOURCED"
 
 
 class SourceRecord(BaseModel):
@@ -35,7 +46,15 @@ class ClaimRecord(BaseModel):
     claim_id: str = Field(description="Unique identifier for this claim (e.g., 'C01')")
     text: str = Field(description="The factual claim (e.g., 'Consumer lag is 45,000 on partition 2')")
     source_id: str = Field(description="References SourceRecord.source_id that produced this claim")
-    confidence: str = Field(description="Confidence level: high, medium, low")
+    confidence: Confidence = Field(
+        description=(
+            "Confidence level based on corroborating evidence. "
+            "HIGH: 2+ independent sources corroborate. "
+            "MEDIUM: 1 source supports, no contradictions. "
+            "LOW: inferred from indirect evidence or single weak signal. "
+            "UNSOURCED: no data source backs the claim."
+        ),
+    )
 
 
 class ConflictRecord(BaseModel):

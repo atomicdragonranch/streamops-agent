@@ -6,6 +6,7 @@ import pytest
 
 from streamops_mcp.agent.schemas import (
     ClaimRecord,
+    Confidence,
     ConflictRecord,
     DiagnosisReport,
     IncidentReport,
@@ -211,12 +212,13 @@ class TestClaimRecord:
             claim_id="C01",
             text="Consumer lag is 45,000 on partition 2",
             source_id="src-002",
-            confidence="high",
+            confidence="HIGH",
         )
 
         # Assert
         assert claim.claim_id == "C01"
         assert claim.source_id == "src-002"
+        assert claim.confidence == Confidence.HIGH
 
     def test_claim_references_source(self):
         # Arrange
@@ -230,11 +232,12 @@ class TestClaimRecord:
             claim_id="C02",
             text="Consumer lag exceeds threshold",
             source_id=source.source_id,
-            confidence="high",
+            confidence="MEDIUM",
         )
 
         # Assert
         assert claim.source_id == source.source_id
+        assert claim.confidence == Confidence.MEDIUM
 
 
 class TestConflictRecord:
@@ -306,13 +309,13 @@ class TestDiagnosisWithAttribution:
                     "claim_id": "C01",
                     "text": "Flink job is RUNNING but degraded",
                     "source_id": "src-001",
-                    "confidence": "high",
+                    "confidence": "HIGH",
                 },
                 {
                     "claim_id": "C02",
                     "text": "Consumer lag is 45,000 on partition 2",
                     "source_id": "src-002",
-                    "confidence": "high",
+                    "confidence": "HIGH",
                 },
             ],
             "conflicts": [],
@@ -365,13 +368,13 @@ class TestDiagnosisWithAttribution:
                     "claim_id": "C01",
                     "text": "Checkpoint completed successfully",
                     "source_id": "src-001",
-                    "confidence": "high",
+                    "confidence": "HIGH",
                 },
                 {
                     "claim_id": "C02",
                     "text": "Checkpoint took 45s, exceeding 30s threshold",
                     "source_id": "src-002",
-                    "confidence": "high",
+                    "confidence": "MEDIUM",
                 },
             ],
             "conflicts": [
@@ -420,7 +423,7 @@ class TestDiagnosisWithAttribution:
                     claim_id="C01",
                     text="Backpressure ratio is 0.85",
                     source_id="src-001",
-                    confidence="high",
+                    confidence=Confidence.HIGH,
                 ),
             ],
             conflicts=[],
@@ -441,3 +444,184 @@ class TestDiagnosisWithAttribution:
         assert len(restored.sources) == 1
         assert len(restored.claims) == 1
         assert restored.claims[0].source_id == restored.sources[0].source_id
+
+
+class TestConfidence:
+
+    def test_confidence_enum_values(self):
+        # Assert
+        assert Confidence.HIGH.value == "HIGH"
+        assert Confidence.MEDIUM.value == "MEDIUM"
+        assert Confidence.LOW.value == "LOW"
+        assert Confidence.UNSOURCED.value == "UNSOURCED"
+        assert len(Confidence) == 4
+
+    def test_claim_with_high_confidence(self):
+        # Arrange + Act
+        claim = ClaimRecord(
+            claim_id="C01",
+            text="Consumer lag is 45,000",
+            source_id="src-001",
+            confidence=Confidence.HIGH,
+        )
+
+        # Assert
+        assert claim.confidence == Confidence.HIGH
+
+    def test_claim_with_unsourced_confidence(self):
+        # Arrange + Act
+        claim = ClaimRecord(
+            claim_id="C02",
+            text="Network issues may be contributing",
+            source_id="src-none",
+            confidence=Confidence.UNSOURCED,
+        )
+
+        # Assert
+        assert claim.confidence == Confidence.UNSOURCED
+
+    def test_confidence_from_string_coercion(self):
+        # Arrange
+        data = {
+            "claim_id": "C03",
+            "text": "Flink job is degraded",
+            "source_id": "src-001",
+            "confidence": "LOW",
+        }
+
+        # Act
+        claim = ClaimRecord.model_validate(data)
+
+        # Assert
+        assert claim.confidence == Confidence.LOW
+
+    def test_confidence_round_trip_serialization(self):
+        # Arrange
+        claim = ClaimRecord(
+            claim_id="C04",
+            text="Backpressure ratio is 0.85",
+            source_id="src-001",
+            confidence=Confidence.MEDIUM,
+        )
+
+        # Act
+        json_str = claim.model_dump_json()
+        restored = ClaimRecord.model_validate_json(json_str)
+
+        # Assert
+        assert restored.confidence == Confidence.MEDIUM
+
+    def test_confidence_in_json_schema(self):
+        # Act
+        schema = DiagnosisReport.model_json_schema()
+
+        # Assert
+        schema_str = str(schema)
+        assert "Confidence" in schema_str
+
+    def test_mixed_confidence_claims_in_diagnosis(self):
+        # Arrange
+        report = DiagnosisReport(
+            anomaly_type="latency_spike",
+            detected_at="2026-06-18T15:00:00Z",
+            sources=[
+                SourceRecord(
+                    source_id="src-001",
+                    tool_name="query_flink_jobs",
+                    retrieved_at="2026-06-18T15:00:01Z",
+                    raw_output='{"state": "RUNNING"}',
+                ),
+            ],
+            claims=[
+                ClaimRecord(
+                    claim_id="C01",
+                    text="Job is running but slow",
+                    source_id="src-001",
+                    confidence=Confidence.HIGH,
+                ),
+                ClaimRecord(
+                    claim_id="C02",
+                    text="Possible GC pressure",
+                    source_id="src-001",
+                    confidence=Confidence.LOW,
+                ),
+                ClaimRecord(
+                    claim_id="C03",
+                    text="Network latency may be involved",
+                    source_id="src-001",
+                    confidence=Confidence.UNSOURCED,
+                ),
+            ],
+            affected_components=[],
+            root_cause=RootCause(
+                summary="GC pressure suspected",
+                confidence="medium",
+                reasoning="Indirect evidence only",
+            ),
+            tools_used=["query_flink_jobs"],
+        )
+
+        # Act
+        high_claims = [c for c in report.claims if c.confidence == Confidence.HIGH]
+        low_claims = [c for c in report.claims if c.confidence in (Confidence.LOW, Confidence.UNSOURCED)]
+
+        # Assert
+        assert len(high_claims) == 1
+        assert len(low_claims) == 2
+
+
+class TestIncidentReportLowConfidence:
+
+    def test_incident_with_low_confidence_claims(self):
+        # Arrange
+        data = {
+            "incident_id": "inc-001",
+            "title": "Latency spike on StreamOps Processor",
+            "severity": "HIGH",
+            "summary": "Processing latency exceeded SLA thresholds.",
+            "anomaly_type": "latency_spike",
+            "root_cause": "GC pressure on TaskManager",
+            "affected_components": ["flink-operator"],
+            "timeline": ["15:00 - Latency exceeded threshold"],
+            "recommended_actions": [
+                {
+                    "action": "Increase TaskManager heap",
+                    "rationale": "Reduce GC pressure",
+                    "risk": "low",
+                    "requires_downtime": True,
+                }
+            ],
+            "low_confidence_claims": [
+                "[LOW] Possible GC pressure",
+                "[UNSOURCED] Network latency may be involved",
+            ],
+            "monitoring_notes": "Watch heap usage after restart",
+        }
+
+        # Act
+        report = IncidentReport.model_validate(data)
+
+        # Assert
+        assert len(report.low_confidence_claims) == 2
+        assert "[UNSOURCED]" in report.low_confidence_claims[1]
+
+    def test_incident_defaults_to_empty_low_confidence(self):
+        # Arrange
+        data = {
+            "incident_id": "inc-002",
+            "title": "Healthy check",
+            "severity": "LOW",
+            "summary": "All systems nominal.",
+            "anomaly_type": "none",
+            "root_cause": "N/A",
+            "affected_components": [],
+            "timeline": [],
+            "recommended_actions": [],
+            "monitoring_notes": "None",
+        }
+
+        # Act
+        report = IncidentReport.model_validate(data)
+
+        # Assert
+        assert report.low_confidence_claims == []
