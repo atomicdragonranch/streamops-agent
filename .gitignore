@@ -50,6 +50,9 @@ demo-output/*_incident.json
 demo-output/*_healthy.json
 !demo-output/examples/
 
-# Env
+# Env / Credentials
 .env
 .env.local
+*.pem
+*.key
+credentials.json
