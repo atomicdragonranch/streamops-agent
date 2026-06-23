@@ -3,7 +3,7 @@
 [![CI](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
-[![Tests](https://img.shields.io/badge/tests-37%20passing-brightgreen.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-161%20passing-brightgreen.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
 
 AI-powered operations agent for streaming infrastructure monitoring. Built with Apache Flink 2.0, Kafka, and Claude to detect anomalies, diagnose root causes, and escalate incidents in real-time pipelines.
 
@@ -257,8 +257,8 @@ streamops-agent/
 |--------|-------|-----------|
 | Event Simulator | 23 | JUnit 5, AssertJ |
 | Stream Processor | 14 | JUnit 5, AssertJ, Mockito |
-| MCP Server + Agent | 53 | pytest |
-| **Total** | **90** | |
+| MCP Server + Agent | 161 | pytest |
+| **Total** | **198** | |
 
 ## Quick Start
 
