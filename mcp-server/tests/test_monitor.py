@@ -1,13 +1,24 @@
 """Tests for the MonitorAgent.
 
 Tests the agent's internal logic (anomaly detection heuristic, JSON extraction,
-parsing) without making actual Claude API calls.
+parsing, retry/fallback behavior) without making actual Claude API calls.
 """
 
+from unittest.mock import AsyncMock, patch
+
+import anthropic
+import httpx
 import pytest
 
 from streamops_mcp.agent.monitor import MonitorAgent
 from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport, Severity
+
+
+def _fake_response(status_code: int) -> httpx.Response:
+    """Build a minimal httpx.Response that anthropic exception constructors accept."""
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    resp = httpx.Response(status_code=status_code, request=req)
+    return resp
 
 
 @pytest.fixture
@@ -169,3 +180,178 @@ class TestIncidentParsing:
         assert isinstance(result, IncidentReport)
         assert result.severity == Severity.MEDIUM
         assert "backpressure" in result.anomaly_type
+
+
+class TestIsRetryable:
+
+    def test_timeout_is_retryable(self, agent):
+        # Arrange
+        exc = anthropic.APITimeoutError(request=None)
+
+        # Act / Assert
+        assert agent._is_retryable(exc) is True
+
+    def test_rate_limit_is_retryable(self, agent):
+        # Arrange
+        exc = anthropic.RateLimitError(
+            message="rate limited",
+            response=_fake_response(429),
+            body=None,
+        )
+
+        # Act / Assert
+        assert agent._is_retryable(exc) is True
+
+    def test_internal_server_error_is_retryable(self, agent):
+        # Arrange
+        exc = anthropic.InternalServerError(
+            message="internal error",
+            response=_fake_response(500),
+            body=None,
+        )
+
+        # Act / Assert
+        assert agent._is_retryable(exc) is True
+
+    def test_auth_error_is_not_retryable(self, agent):
+        # Arrange
+        exc = anthropic.AuthenticationError(
+            message="invalid key",
+            response=_fake_response(401),
+            body=None,
+        )
+
+        # Act / Assert
+        assert agent._is_retryable(exc) is False
+
+    def test_bad_request_is_not_retryable(self, agent):
+        # Arrange
+        exc = anthropic.BadRequestError(
+            message="bad request",
+            response=_fake_response(400),
+            body=None,
+        )
+
+        # Act / Assert
+        assert agent._is_retryable(exc) is False
+
+    def test_value_error_is_not_retryable(self, agent):
+        # Arrange
+        exc = ValueError("bad parse")
+
+        # Act / Assert
+        assert agent._is_retryable(exc) is False
+
+
+class TestRetrySubagent:
+
+    @pytest.mark.asyncio
+    async def test_succeeds_on_first_try(self, agent):
+        # Arrange
+        factory = AsyncMock(return_value="result")
+
+        # Act
+        result = await agent._retry_subagent("TestAgent", factory)
+
+        # Assert
+        assert result == "result"
+        assert factory.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retries_on_transient_then_succeeds(self, agent, monkeypatch):
+        # Arrange
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_max_retries", 2)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_retry_base_delay", 0.0)
+        call_count = 0
+
+        async def factory():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise anthropic.APITimeoutError(request=None)
+            return "recovered"
+
+        # Act
+        result = await agent._retry_subagent("TestAgent", factory)
+
+        # Assert
+        assert result == "recovered"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_raises_after_all_retries_exhausted(self, agent, monkeypatch):
+        # Arrange
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_max_retries", 1)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_retry_base_delay", 0.0)
+
+        async def factory():
+            raise anthropic.APITimeoutError(request=None)
+
+        # Act / Assert
+        with pytest.raises(anthropic.APITimeoutError):
+            await agent._retry_subagent("TestAgent", factory)
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_permanent_error(self, agent, monkeypatch):
+        # Arrange
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_max_retries", 2)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_retry_base_delay", 0.0)
+        call_count = 0
+
+        async def factory():
+            nonlocal call_count
+            call_count += 1
+            raise anthropic.AuthenticationError(
+                message="invalid key",
+                response=_fake_response(401),
+                body=None,
+            )
+
+        # Act / Assert
+        with pytest.raises(anthropic.AuthenticationError):
+            await agent._retry_subagent("TestAgent", factory)
+        assert call_count == 1
+
+
+class TestFallbackReport:
+
+    def test_produces_valid_incident_report(self):
+        # Arrange
+        diagnosis = DiagnosisReport(
+            anomaly_type="latency_spike",
+            detected_at="2026-06-23T12:00:00Z",
+            affected_components=[
+                {"name": "flink-job", "role": "processor", "status": "degraded", "evidence": "p99 > 5s"},
+            ],
+            root_cause={"summary": "GC pressure on TaskManager", "confidence": "high", "reasoning": "heap at 95%"},
+            tools_used=["query_flink_jobs"],
+        )
+
+        # Act
+        result = MonitorAgent._fallback_report(diagnosis)
+
+        # Assert
+        assert isinstance(result, IncidentReport)
+        assert result.severity == Severity.MEDIUM
+        assert "report agent unavailable" in result.title
+        assert result.anomaly_type == "latency_spike"
+        assert "flink-job" in result.affected_components
+        assert result.requires_human_approval is True
+
+    def test_handles_empty_components(self):
+        # Arrange
+        diagnosis = DiagnosisReport(
+            anomaly_type="unknown",
+            detected_at="2026-06-23T12:00:00Z",
+            affected_components=[],
+            root_cause={"summary": "unclear", "confidence": "low", "reasoning": "insufficient data"},
+            tools_used=[],
+        )
+
+        # Act
+        result = MonitorAgent._fallback_report(diagnosis)
+
+        # Assert
+        assert isinstance(result, IncidentReport)
+        assert result.affected_components == []
+        assert result.recommended_actions == []

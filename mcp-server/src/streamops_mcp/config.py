@@ -56,6 +56,10 @@ class StreamOpsConfig(BaseSettings):
     agent_monitor_interval: int = 60
     agent_handoff_max_context_chars: int = 50_000
 
+    # Subagent retry configuration
+    agent_max_retries: int = 2
+    agent_retry_base_delay: float = 1.0
+
     # Input sanitization
     agent_sanitize_max_output_chars: int = 20_000
 

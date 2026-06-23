@@ -8,9 +8,12 @@ The loop is driven by Claude's stop_reason:
   - "end_turn": Claude is done, check if there's an incident to report
 
 Sub-agents start blank; the coordinator injects all context via structured
-prompts to maintain session isolation.
+prompts to maintain session isolation. Transient API failures (timeouts,
+rate limits, 5xx) are retried with exponential backoff; permanent failures
+trigger graceful degradation.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -51,6 +54,47 @@ class MonitorAgent:
         self.multi_agent = multi_agent
         self.max_tool_rounds = config.agent_max_tool_rounds
 
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        """Classify whether an API error is transient and worth retrying."""
+        if isinstance(exc, anthropic.APITimeoutError):
+            return True
+        if isinstance(exc, anthropic.RateLimitError):
+            return True
+        if isinstance(exc, anthropic.InternalServerError):
+            return True
+        if isinstance(exc, anthropic.APIConnectionError):
+            return True
+        return False
+
+    async def _retry_subagent(self, name: str, coro_factory):
+        """Retry a subagent call with exponential backoff on transient failures.
+
+        Returns the subagent result on success, or raises on permanent failure
+        or after all retries are exhausted.
+        """
+        max_retries = config.agent_max_retries
+        base_delay = config.agent_retry_base_delay
+        last_exc = None
+
+        for attempt in range(1 + max_retries):
+            try:
+                return await coro_factory()
+            except Exception as exc:
+                last_exc = exc
+                retryable = self._is_retryable(exc)
+                logger.error(
+                    "%s failed (attempt %d/%d, retryable=%s): %s",
+                    name, attempt + 1, 1 + max_retries, retryable, exc,
+                )
+                if not retryable or attempt >= max_retries:
+                    raise
+                delay = base_delay * (2 ** attempt)
+                logger.info("Retrying %s in %.1fs", name, delay)
+                await asyncio.sleep(delay)
+
+        raise last_exc  # pragma: no cover
+
     async def run_cycle(self) -> IncidentReport | None:
         """Run one monitoring cycle: poll, detect, diagnose, report.
 
@@ -64,8 +108,27 @@ class MonitorAgent:
             return None
 
         if self.multi_agent:
-            diagnosis = await self._spawn_diagnostic_agent(detection)
-            report = await self._spawn_report_agent(diagnosis)
+            try:
+                diagnosis = await self._retry_subagent(
+                    "Diagnostic Agent",
+                    lambda: self._spawn_diagnostic_agent(detection),
+                )
+            except Exception as exc:
+                logger.error(
+                    "Diagnostic Agent failed after retries, cycle aborted: %s", exc,
+                )
+                return None
+
+            try:
+                report = await self._retry_subagent(
+                    "Report Agent",
+                    lambda: self._spawn_report_agent(diagnosis),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Report Agent failed after retries, producing fallback report: %s", exc,
+                )
+                report = self._fallback_report(diagnosis)
         else:
             diagnosis = self._extract_diagnosis_from_detection(detection)
             report = await self._spawn_report_agent(diagnosis)
@@ -84,6 +147,22 @@ class MonitorAgent:
 
         await escalate(report, diagnosis=diagnosis)
         return report
+
+    @staticmethod
+    def _fallback_report(diagnosis: DiagnosisReport) -> IncidentReport:
+        """Produce a fallback IncidentReport when the Report Agent fails."""
+        return IncidentReport(
+            incident_id=str(uuid.uuid4())[:8],
+            title=f"Anomaly: {diagnosis.anomaly_type} (report agent unavailable)",
+            severity=Severity.MEDIUM,
+            summary=diagnosis.root_cause.summary,
+            anomaly_type=diagnosis.anomaly_type,
+            root_cause=diagnosis.root_cause.summary,
+            affected_components=[c.name for c in diagnosis.affected_components],
+            timeline=[f"Detected at {diagnosis.detected_at}"],
+            recommended_actions=[],
+            monitoring_notes="Report agent was unavailable; review diagnosis data directly",
+        )
 
     async def _detect_anomalies(self) -> str | None:
         """Run the agentic loop to poll infrastructure and detect anomalies.
