@@ -9,7 +9,9 @@ from streamops_mcp.agent.schemas import (
     Confidence,
     ConflictRecord,
     DiagnosisReport,
+    DiagnosticToReportHandoff,
     IncidentReport,
+    MonitorToDiagnosticHandoff,
     Severity,
     SourceRecord,
 )
@@ -625,3 +627,136 @@ class TestIncidentReportLowConfidence:
 
         # Assert
         assert report.low_confidence_claims == []
+
+
+class TestMonitorToDiagnosticHandoff:
+
+    def test_valid_handoff(self):
+        # Arrange + Act
+        handoff = MonitorToDiagnosticHandoff(
+            anomaly_context="Latency spike detected on partition 2",
+            schema_hint=DiagnosisReport.model_json_schema(),
+        )
+
+        # Assert
+        assert handoff.anomaly_context == "Latency spike detected on partition 2"
+        assert "anomaly_type" in str(handoff.schema_hint)
+
+    def test_truncates_oversized_context(self, monkeypatch):
+        # Arrange
+        monkeypatch.setenv("STREAMOPS_AGENT_HANDOFF_MAX_CONTEXT_CHARS", "100")
+        from streamops_mcp.config import StreamOpsConfig
+        test_config = StreamOpsConfig()
+        monkeypatch.setattr("streamops_mcp.agent.schemas.handoff.config", test_config)
+
+        oversized = "x" * 200
+
+        # Act
+        handoff = MonitorToDiagnosticHandoff(
+            anomaly_context=oversized,
+            schema_hint={},
+        )
+
+        # Assert
+        assert len(handoff.anomaly_context) == 100
+
+    def test_round_trip_serialization(self):
+        # Arrange
+        handoff = MonitorToDiagnosticHandoff(
+            anomaly_context="Backpressure ratio exceeded threshold",
+            schema_hint=DiagnosisReport.model_json_schema(),
+        )
+
+        # Act
+        json_str = handoff.model_dump_json()
+        restored = MonitorToDiagnosticHandoff.model_validate_json(json_str)
+
+        # Assert
+        assert restored.anomaly_context == handoff.anomaly_context
+
+
+class TestDiagnosticToReportHandoff:
+
+    def test_valid_handoff(self):
+        # Arrange
+        diagnosis = DiagnosisReport(
+            anomaly_type="latency_spike",
+            detected_at="2026-06-18T15:00:00Z",
+            sources=[],
+            claims=[],
+            conflicts=[],
+            affected_components=[],
+            root_cause=RootCause(
+                summary="GC pressure",
+                confidence="high",
+                reasoning="Heap at 92%",
+            ),
+            tools_used=["query_flink_jobs"],
+        )
+
+        # Act
+        handoff = DiagnosticToReportHandoff(
+            diagnosis_json=diagnosis.model_dump_json(indent=2),
+            schema_hint=IncidentReport.model_json_schema(),
+        )
+
+        # Assert
+        assert "latency_spike" in handoff.diagnosis_json
+        assert "incident_id" in str(handoff.schema_hint)
+
+    def test_rejects_oversized_diagnosis(self, monkeypatch):
+        # Arrange
+        monkeypatch.setenv("STREAMOPS_AGENT_HANDOFF_MAX_CONTEXT_CHARS", "50")
+        from streamops_mcp.config import StreamOpsConfig
+        test_config = StreamOpsConfig()
+        monkeypatch.setattr("streamops_mcp.agent.schemas.handoff.config", test_config)
+
+        oversized_json = "x" * 100
+
+        # Act + Assert
+        with pytest.raises(ValueError, match="exceeds max handoff size"):
+            DiagnosticToReportHandoff(
+                diagnosis_json=oversized_json,
+                schema_hint={},
+            )
+
+    def test_round_trip_serialization(self):
+        # Arrange
+        diagnosis = DiagnosisReport(
+            anomaly_type="backpressure",
+            detected_at="2026-06-18T15:00:00Z",
+            sources=[],
+            claims=[],
+            conflicts=[],
+            affected_components=[],
+            root_cause=RootCause(
+                summary="Slow sink",
+                confidence="high",
+                reasoning="Backpressure on sink",
+            ),
+            tools_used=["query_flink_jobs"],
+        )
+        handoff = DiagnosticToReportHandoff(
+            diagnosis_json=diagnosis.model_dump_json(),
+            schema_hint=IncidentReport.model_json_schema(),
+        )
+
+        # Act
+        json_str = handoff.model_dump_json()
+        restored = DiagnosticToReportHandoff.model_validate_json(json_str)
+
+        # Assert
+        assert restored.diagnosis_json == handoff.diagnosis_json
+
+    def test_default_max_context_is_50k(self):
+        # Arrange
+        large_but_under_limit = "a" * 49_000
+
+        # Act
+        handoff = DiagnosticToReportHandoff(
+            diagnosis_json=large_but_under_limit,
+            schema_hint={},
+        )
+
+        # Assert
+        assert len(handoff.diagnosis_json) == 49_000

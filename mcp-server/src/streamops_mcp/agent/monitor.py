@@ -20,7 +20,13 @@ import anthropic
 
 from streamops_mcp.agent.executor import execute_tool
 from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS, REPORT_TOOLS
-from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport, Severity
+from streamops_mcp.agent.schemas import (
+    DiagnosisReport,
+    DiagnosticToReportHandoff,
+    IncidentReport,
+    MonitorToDiagnosticHandoff,
+    Severity,
+)
 from streamops_mcp.agent.escalation import escalate
 from streamops_mcp.config import config
 from streamops_mcp.prompts import load_prompt
@@ -144,14 +150,24 @@ class MonitorAgent:
         """
         logger.info("Spawning Diagnostic Agent")
 
+        schema_hint = DiagnosisReport.model_json_schema()
+        handoff = MonitorToDiagnosticHandoff(
+            anomaly_context=anomaly_context,
+            schema_hint=schema_hint,
+        )
+        logger.info(
+            "Monitor->Diagnostic handoff validated (%d chars)",
+            len(handoff.anomaly_context),
+        )
+
         messages = [{
             "role": "user",
             "content": f"""Investigate the following anomaly detected by the monitoring system:
 
-{anomaly_context}
+{handoff.anomaly_context}
 
 Use the available tools to determine the root cause. Respond with a JSON object matching the DiagnosisReport schema:
-{DiagnosisReport.model_json_schema()}""",
+{handoff.schema_hint}""",
         }]
 
         for round_num in range(self.max_tool_rounds):
@@ -206,6 +222,15 @@ Use the available tools to determine the root cause. Respond with a JSON object 
         logger.info("Spawning Report Agent")
 
         diagnosis_json = diagnosis.model_dump_json(indent=2)
+        schema_hint = IncidentReport.model_json_schema()
+        handoff = DiagnosticToReportHandoff(
+            diagnosis_json=diagnosis_json,
+            schema_hint=schema_hint,
+        )
+        logger.info(
+            "Diagnostic->Report handoff validated (%d chars)",
+            len(handoff.diagnosis_json),
+        )
 
         response = self.client.messages.create(
             model=self.model,
@@ -215,10 +240,10 @@ Use the available tools to determine the root cause. Respond with a JSON object 
                 "role": "user",
                 "content": f"""Produce an incident report from this diagnosis:
 
-{diagnosis_json}
+{handoff.diagnosis_json}
 
 Respond with a JSON object matching the IncidentReport schema:
-{IncidentReport.model_json_schema()}""",
+{handoff.schema_hint}""",
             }],
         )
 

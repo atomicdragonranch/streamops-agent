@@ -53,6 +53,7 @@ class StreamOpsConfig(BaseSettings):
     agent_max_tokens: int = 8192
     agent_max_tool_rounds: int = 15
     agent_monitor_interval: int = 60
+    agent_handoff_max_context_chars: int = 50_000
 
     model_config = {"env_prefix": "STREAMOPS_"}
 
