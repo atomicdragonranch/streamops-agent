@@ -3,7 +3,7 @@
 [![CI](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
-[![Tests](https://img.shields.io/badge/tests-161%20passing-brightgreen.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-197%20passing-brightgreen.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
 
 AI-powered operations agent for streaming infrastructure monitoring. Built with Apache Flink 2.0, Kafka, and Claude to detect anomalies, diagnose root causes, and escalate incidents in real-time pipelines.
 
@@ -239,7 +239,7 @@ streamops-agent/
         schemas/              # Pydantic models (DiagnosisReport, IncidentReport)
         main.py               # CLI entry point
       config.py               # pydantic-settings config
-    tests/                    # 53 Python tests
+    tests/                    # 197 Python tests
   config/
     prometheus.yml            # Scrape config for Flink JM + TM metrics
     grafana/provisioning/
@@ -257,8 +257,8 @@ streamops-agent/
 |--------|-------|-----------|
 | Event Simulator | 23 | JUnit 5, AssertJ |
 | Stream Processor | 14 | JUnit 5, AssertJ, Mockito |
-| MCP Server + Agent | 161 | pytest |
-| **Total** | **198** | |
+| MCP Server + Agent | 197 | pytest |
+| **Total** | **234** | |
 
 ## Quick Start
 
@@ -397,5 +397,8 @@ All recommended actions require human review and approval before execution. This
 | Handoff validation | `schemas/handoff.py` typed Pydantic payloads at agent boundaries |
 | Runbook-as-skill | `prompts/runbooks/*.md` injected into diagnostic context |
 | Incident audit trail | `audit.py` JSON Lines with queryable filters |
+| Structured tool errors | `executor.py` categorized JSON (transient/validation/permission/internal) |
+| Subagent retry + fallback | `monitor.py:_retry_subagent()` exponential backoff, graceful degradation |
+| Result aggregation | `monitor.py` confidence filtering, low-confidence downgrade |
 | Secret scanning | `.github/workflows/secret-scan.yml` TruffleHog CI |
 | Config externalization | `config.py`, `application.properties` |
