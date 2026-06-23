@@ -1,0 +1,21 @@
+{
+  "scenario": "backpressure",
+  "description": "Backpressure detected on Flink operators causing processing delays",
+  "input": {
+    "anomaly_context": "Backpressure detected: operator 'sink-kafka' showing backpressure ratio 0.87. Upstream operators idle 45% of the time. Checkpoint barrier alignment delayed.",
+    "simulated_tool_responses": {
+      "query_flink_jobs": "{\"jobs\": [{\"id\": \"abc123\", \"name\": \"streamops-processor\", \"state\": \"RUNNING\"}]}",
+      "get_consumer_lag": "{\"total_lag\": 12000, \"partitions\": [{\"partition\": 0, \"lag\": 4000}, {\"partition\": 1, \"lag\": 4000}, {\"partition\": 2, \"lag\": 4000}]}",
+      "query_metrics": "{\"status\": \"success\", \"data\": {\"result\": [{\"metric\": {\"__name__\": \"flink_taskmanager_job_task_backPressuredTimeMsPerSecond\"}, \"value\": [1719756000, \"870\"]}]}}"
+    }
+  },
+  "expected": {
+    "tool_calls_required": ["query_flink_jobs"],
+    "tool_calls_recommended": ["query_metrics", "get_consumer_lag"],
+    "severity_range": ["MEDIUM", "HIGH"],
+    "diagnosis_keywords": ["backpressure", "sink", "operator"],
+    "anomaly_type": "backpressure",
+    "min_claims": 1,
+    "runbook_should_match": true
+  }
+}

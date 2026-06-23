@@ -1,0 +1,21 @@
+{
+  "scenario": "error-burst",
+  "description": "Spike in processing errors or late events being dropped",
+  "input": {
+    "anomaly_context": "Error burst detected: 342 exceptions in the last 5 minutes for job 'streamops-processor'. Late events dropped: 1,250 in the last 10 minutes. Watermark advancing past event timestamps.",
+    "simulated_tool_responses": {
+      "query_flink_jobs": "{\"jobs\": [{\"id\": \"abc123\", \"name\": \"streamops-processor\", \"state\": \"RUNNING\"}]}",
+      "get_flink_exceptions": "{\"exceptions\": [{\"timestamp\": \"2026-06-18T15:00:00Z\", \"exception\": \"java.lang.RuntimeException: Deserialization failed\", \"task\": \"Source: KafkaSource -> MetricAggregator\"}]}",
+      "query_metrics": "{\"status\": \"success\", \"data\": {\"result\": [{\"metric\": {\"__name__\": \"flink_taskmanager_job_task_operator_numLateRecordsDropped\"}, \"value\": [1719756000, \"1250\"]}]}}"
+    }
+  },
+  "expected": {
+    "tool_calls_required": ["query_flink_jobs", "get_flink_exceptions"],
+    "tool_calls_recommended": ["query_metrics"],
+    "severity_range": ["HIGH", "CRITICAL"],
+    "diagnosis_keywords": ["error", "exception", "late"],
+    "anomaly_type": "error_burst",
+    "min_claims": 2,
+    "runbook_should_match": true
+  }
+}

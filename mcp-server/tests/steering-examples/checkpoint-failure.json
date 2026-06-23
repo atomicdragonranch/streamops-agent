@@ -1,0 +1,21 @@
+{
+  "scenario": "checkpoint-failure",
+  "description": "Flink checkpoint consistently failing or timing out",
+  "input": {
+    "anomaly_context": "Checkpoint failure detected: last 3 checkpoints FAILED for job 'streamops-processor'. Checkpoint duration exceeded timeout (30s threshold). State size growing: 256MB -> 512MB -> 1.2GB over last hour.",
+    "simulated_tool_responses": {
+      "query_flink_jobs": "{\"jobs\": [{\"id\": \"abc123\", \"name\": \"streamops-processor\", \"state\": \"RUNNING\"}]}",
+      "get_checkpoint_stats": "{\"counts\": {\"completed\": 42, \"failed\": 3, \"in_progress\": 0}, \"latest\": {\"status\": \"FAILED\", \"duration\": 35000, \"size\": 1258291200}}",
+      "query_metrics": "{\"status\": \"success\", \"data\": {\"result\": [{\"metric\": {\"__name__\": \"flink_jobmanager_job_lastCheckpointSize\"}, \"value\": [1719756000, \"1258291200\"]}]}}"
+    }
+  },
+  "expected": {
+    "tool_calls_required": ["query_flink_jobs", "get_checkpoint_stats"],
+    "tool_calls_recommended": ["query_metrics"],
+    "severity_range": ["HIGH", "CRITICAL"],
+    "diagnosis_keywords": ["checkpoint", "state", "timeout"],
+    "anomaly_type": "checkpoint_failure",
+    "min_claims": 2,
+    "runbook_should_match": true
+  }
+}

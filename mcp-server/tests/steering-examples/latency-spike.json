@@ -1,0 +1,22 @@
+{
+  "scenario": "latency-spike",
+  "description": "Processing latency exceeds SLA threshold on stream processor",
+  "input": {
+    "anomaly_context": "Latency spike detected: flink_taskmanager_job_task_operator_processing_latency = 2340ms (threshold: 200ms). Job 'streamops-processor' showing degraded performance for 3 consecutive polling intervals.",
+    "simulated_tool_responses": {
+      "query_flink_jobs": "{\"jobs\": [{\"id\": \"abc123\", \"name\": \"streamops-processor\", \"state\": \"RUNNING\"}]}",
+      "get_checkpoint_stats": "{\"latest\": {\"status\": \"COMPLETED\", \"duration\": 12000, \"size\": 52428800}}",
+      "get_consumer_lag": "{\"total_lag\": 45000, \"partitions\": [{\"partition\": 0, \"lag\": 5000}, {\"partition\": 1, \"lag\": 5000}, {\"partition\": 2, \"lag\": 35000}]}",
+      "query_metrics": "{\"status\": \"success\", \"data\": {\"result\": [{\"metric\": {\"__name__\": \"jvm_memory_heap_used\"}, \"value\": [1719756000, \"3865470566\"]}]}}"
+    }
+  },
+  "expected": {
+    "tool_calls_required": ["query_flink_jobs", "get_consumer_lag"],
+    "tool_calls_recommended": ["query_metrics", "get_checkpoint_stats"],
+    "severity_range": ["MEDIUM", "HIGH", "CRITICAL"],
+    "diagnosis_keywords": ["latency", "lag", "partition"],
+    "anomaly_type": "latency_spike",
+    "min_claims": 2,
+    "runbook_should_match": true
+  }
+}

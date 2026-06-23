@@ -1,0 +1,22 @@
+{
+  "scenario": "consumer-lag",
+  "description": "Kafka consumer lag growing, throughput dropping below baseline",
+  "input": {
+    "anomaly_context": "Consumer lag alert: total lag 85,000 messages across 6 partitions for group 'streamops-processor'. Throughput dropped from 5,000 msg/s to 1,200 msg/s over the last 10 minutes.",
+    "simulated_tool_responses": {
+      "query_flink_jobs": "{\"jobs\": [{\"id\": \"abc123\", \"name\": \"streamops-processor\", \"state\": \"RUNNING\"}]}",
+      "get_consumer_lag": "{\"total_lag\": 85000, \"partitions\": [{\"partition\": 0, \"lag\": 14000}, {\"partition\": 1, \"lag\": 14000}, {\"partition\": 2, \"lag\": 14500}, {\"partition\": 3, \"lag\": 14500}, {\"partition\": 4, \"lag\": 14000}, {\"partition\": 5, \"lag\": 14000}]}",
+      "get_topic_throughput": "{\"topic\": \"stream-events\", \"messages_per_second\": 1200, \"sample_window_seconds\": 60}",
+      "query_metrics": "{\"status\": \"success\", \"data\": {\"result\": [{\"metric\": {\"__name__\": \"kafka_consumer_records_lag\"}, \"value\": [1719756000, \"85000\"]}]}}"
+    }
+  },
+  "expected": {
+    "tool_calls_required": ["get_consumer_lag"],
+    "tool_calls_recommended": ["query_flink_jobs", "query_metrics"],
+    "severity_range": ["MEDIUM", "HIGH"],
+    "diagnosis_keywords": ["lag", "throughput", "consumer"],
+    "anomaly_type": "throughput_drop",
+    "min_claims": 2,
+    "runbook_should_match": true
+  }
+}
