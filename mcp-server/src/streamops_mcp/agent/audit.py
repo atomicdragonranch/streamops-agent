@@ -6,7 +6,7 @@ for post-incident review, trend analysis, and agent accuracy tracking.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport
@@ -33,7 +33,7 @@ class AuditLogger:
         human_approved: bool | None = None,
     ) -> dict:
         entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "incident_id": report.incident_id,
             "title": report.title,
             "severity": report.severity.value,

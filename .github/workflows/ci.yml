@@ -51,6 +51,10 @@ jobs:
         working-directory: mcp-server
         run: uv sync --extra dev
 
+      - name: Lint (ruff)
+        working-directory: mcp-server
+        run: uv run ruff check
+
       - name: Pre-commit validation
         run: python scripts/check.py
 

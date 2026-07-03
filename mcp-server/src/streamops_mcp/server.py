@@ -13,10 +13,10 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from streamops_mcp.tools.events import register_event_tools
 from streamops_mcp.tools.flink import register_flink_tools
 from streamops_mcp.tools.kafka import register_kafka_tools
 from streamops_mcp.tools.prometheus import register_prometheus_tools
-from streamops_mcp.tools.events import register_event_tools
 
 logging.basicConfig(
     level=logging.INFO,

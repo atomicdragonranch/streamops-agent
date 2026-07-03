@@ -75,9 +75,9 @@ async def _handle_critical(report: IncidentReport) -> bool | None:
     print("=" * 60)
     print(f"\nIncident: {report.title}")
     print(f"Root cause: {report.root_cause}")
-    print(f"\nRecommended actions:")
+    print("\nRecommended actions:")
     for i, action in enumerate(report.recommended_actions, 1):
-        risk_marker = " [RISK: {}]".format(action.risk) if action.risk != "none" else ""
+        risk_marker = f" [RISK: {action.risk}]" if action.risk != "none" else ""
         downtime = " [REQUIRES DOWNTIME]" if action.requires_downtime else ""
         print(f"  {i}. {action.action}{risk_marker}{downtime}")
 

@@ -8,7 +8,6 @@ the coordinator translates that into PromQL before calling this tool.
 
 import logging
 import time
-from typing import Optional
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -21,7 +20,7 @@ logger = logging.getLogger("streamops-mcp.prometheus")
 def register_prometheus_tools(mcp: FastMCP):
 
     @mcp.tool()
-    async def query_metrics(query: str, time_range: Optional[str] = None) -> dict:
+    async def query_metrics(query: str, time_range: str | None = None) -> dict:
         """Execute a PromQL query against Prometheus.
 
         Args:

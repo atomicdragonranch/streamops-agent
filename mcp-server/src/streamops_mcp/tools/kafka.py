@@ -6,7 +6,6 @@ is growing, the pipeline is falling behind and will eventually hit SLA violation
 """
 
 import logging
-from typing import Optional
 
 from confluent_kafka import Consumer, TopicPartition
 from mcp.server.fastmcp import FastMCP
@@ -19,7 +18,7 @@ logger = logging.getLogger("streamops-mcp.kafka")
 def register_kafka_tools(mcp: FastMCP):
 
     @mcp.tool()
-    async def get_consumer_lag(group_id: Optional[str] = None) -> dict:
+    async def get_consumer_lag(group_id: str | None = None) -> dict:
         """Get consumer group lag across all partitions.
 
         Lag = latest offset - committed offset. Growing lag means the consumer
@@ -77,7 +76,7 @@ def register_kafka_tools(mcp: FastMCP):
             return {"error": str(e)}
 
     @mcp.tool()
-    async def get_topic_throughput(topic: Optional[str] = None, seconds: int = 60) -> dict:
+    async def get_topic_throughput(topic: str | None = None, seconds: int = 60) -> dict:
         """Estimate topic throughput by sampling latest offsets.
 
         Reads high watermark offsets for all partitions and estimates

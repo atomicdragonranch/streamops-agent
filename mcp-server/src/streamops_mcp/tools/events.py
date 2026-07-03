@@ -7,7 +7,6 @@ raw events and the ability to search log messages by content. This is the
 
 import json
 import logging
-from typing import Optional
 
 from confluent_kafka import Consumer, TopicPartition
 from mcp.server.fastmcp import FastMCP
@@ -26,7 +25,7 @@ def _create_consumer(group_suffix: str) -> Consumer:
     })
 
 
-def _deserialize_event(raw: bytes) -> Optional[dict]:
+def _deserialize_event(raw: bytes) -> dict | None:
     """Deserialize a Protobuf StreamEvent from raw Kafka bytes."""
     try:
         from streamops_mcp._proto_helper import deserialize_stream_event
@@ -44,8 +43,8 @@ def register_event_tools(mcp: FastMCP):
     @mcp.tool()
     async def get_recent_events(
         count: int = config.events_default_count,
-        topic: Optional[str] = None,
-        event_type: Optional[str] = None,
+        topic: str | None = None,
+        event_type: str | None = None,
     ) -> dict:
         """Retrieve the N most recent events from a Kafka topic.
 
@@ -123,8 +122,8 @@ def register_event_tools(mcp: FastMCP):
     async def search_logs(
         pattern: str,
         count: int = 20,
-        severity: Optional[str] = None,
-        component: Optional[str] = None,
+        severity: str | None = None,
+        component: str | None = None,
     ) -> dict:
         """Search log events by message content.
 
@@ -219,5 +218,5 @@ def _matches_type(event: dict, event_type: str) -> bool:
     return event_type.lower() in event
 
 
-def _extract_log(event: dict) -> Optional[dict]:
+def _extract_log(event: dict) -> dict | None:
     return event.get("log")

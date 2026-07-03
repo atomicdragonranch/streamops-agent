@@ -1,6 +1,5 @@
 """Tests for StreamOps config."""
 
-import pytest
 
 from streamops_mcp.config import StreamOpsConfig
 

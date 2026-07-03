@@ -14,15 +14,14 @@ trigger graceful degradation.
 """
 
 import asyncio
-import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import anthropic
 
+from streamops_mcp.agent.escalation import escalate
 from streamops_mcp.agent.executor import execute_tool
-from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS, REPORT_TOOLS
 from streamops_mcp.agent.schemas import (
     Confidence,
     DiagnosisReport,
@@ -31,9 +30,9 @@ from streamops_mcp.agent.schemas import (
     MonitorToDiagnosticHandoff,
     Severity,
 )
-from streamops_mcp.agent.escalation import escalate
+from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS
 from streamops_mcp.config import config
-from streamops_mcp.prompts import list_runbooks, load_prompt, load_runbook
+from streamops_mcp.prompts import load_prompt, load_runbook
 
 logger = logging.getLogger("streamops-mcp.monitor")
 
@@ -411,7 +410,7 @@ Respond with a JSON object matching the IncidentReport schema:
         """In single-agent mode, build a diagnosis from the detection text."""
         return DiagnosisReport(
             anomaly_type="unknown",
-            detected_at=datetime.now(timezone.utc).isoformat(),
+            detected_at=datetime.now(UTC).isoformat(),
             affected_components=[],
             root_cause={
                 "summary": "See detection notes below",
@@ -432,7 +431,7 @@ Respond with a JSON object matching the IncidentReport schema:
             logger.warning("Failed to parse DiagnosisReport: %s, using fallback", e)
             return DiagnosisReport(
                 anomaly_type="parse_error",
-                detected_at=datetime.now(timezone.utc).isoformat(),
+                detected_at=datetime.now(UTC).isoformat(),
                 affected_components=[],
                 root_cause={
                     "summary": "Agent response could not be parsed as structured output",
