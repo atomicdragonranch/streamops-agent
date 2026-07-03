@@ -4,6 +4,8 @@ Tests the agent's internal logic (anomaly detection heuristic, JSON extraction,
 parsing, retry/fallback behavior) without making actual Claude API calls.
 """
 
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import anthropic
@@ -488,3 +490,182 @@ class TestExtractLowConfidenceClaims:
 
         # Assert
         assert result == []
+
+
+def _api_response(text: str, stop_reason: str = "end_turn") -> SimpleNamespace:
+    """Build a fake Claude messages.create response with a single text block."""
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=text)],
+        stop_reason=stop_reason,
+    )
+
+
+def _mock_client(*responses) -> SimpleNamespace:
+    """A stand-in Anthropic async client whose messages.create yields the given
+    responses (or raises, if a response is an Exception) in order."""
+    return SimpleNamespace(
+        messages=SimpleNamespace(create=AsyncMock(side_effect=list(responses)))
+    )
+
+
+_DIAGNOSIS_JSON = json.dumps({
+    "anomaly_type": "throughput_drop",
+    "detected_at": "2026-07-03T12:00:00Z",
+    "sources": [
+        {"source_id": "src-001", "tool_name": "query_flink_jobs",
+         "retrieved_at": "2026-07-03T12:00:00Z", "raw_output": "{}"},
+    ],
+    "claims": [
+        {"claim_id": "C01", "text": "Consumer lag is 45000 on partition 2",
+         "source_id": "src-001", "confidence": "HIGH"},
+    ],
+    "affected_components": [
+        {"name": "kafka-consumer", "role": "consumer", "status": "degraded",
+         "evidence": "lag 45000"},
+    ],
+    "root_cause": {"summary": "slow downstream sink", "confidence": "high",
+                   "reasoning": "lag climbing steadily", "supporting_metrics": []},
+    "tools_used": ["query_flink_jobs"],
+    "raw_evidence": [],
+})
+
+_LOW_DIAGNOSIS_JSON = json.dumps({
+    "anomaly_type": "latency_spike",
+    "detected_at": "2026-07-03T12:00:00Z",
+    "sources": [
+        {"source_id": "src-001", "tool_name": "query_prometheus",
+         "retrieved_at": "2026-07-03T12:00:00Z", "raw_output": "{}"},
+    ],
+    "claims": [
+        {"claim_id": "C01", "text": "Possibly elevated latency",
+         "source_id": "src-001", "confidence": "LOW"},
+    ],
+    "affected_components": [],
+    "root_cause": {"summary": "unclear", "confidence": "low",
+                   "reasoning": "single weak signal", "supporting_metrics": []},
+    "tools_used": ["query_prometheus"],
+    "raw_evidence": [],
+})
+
+_REPORT_JSON = json.dumps({
+    "incident_id": "inc-001",
+    "title": "Consumer lag spike on partition 2",
+    "severity": "LOW",
+    "summary": "Consumer lag elevated but within recoverable range.",
+    "anomaly_type": "throughput_drop",
+    "root_cause": "slow downstream sink",
+    "affected_components": ["kafka-consumer"],
+    "timeline": ["Lag began climbing at 12:00"],
+    "recommended_actions": [],
+    "monitoring_notes": "Watch consumer lag over the next 15 minutes.",
+    "requires_human_approval": False,
+})
+
+
+class TestRunCycleOrchestration:
+    """Drive the coordinator run_cycle end to end with a mocked Claude client.
+
+    Covers the Monitor->Diagnostic->Report handoff, the all-low-confidence skip,
+    the report-agent fallback, and the diagnostic-failure abort. escalate() is
+    patched so this stays a coordinator test (escalation has its own suite)."""
+
+    @pytest.mark.asyncio
+    async def test_full_handoff_produces_incident_and_escalates(self, agent):
+        # Arrange: detection finds an anomaly, diagnostic + report agents respond
+        agent.client = _mock_client(
+            _api_response("Anomaly detected: consumer lag spike on partition 2"),
+            _api_response(_DIAGNOSIS_JSON),
+            _api_response(_REPORT_JSON),
+        )
+
+        # Act
+        with patch(
+            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+        ) as mock_escalate:
+            result = await agent.run_cycle()
+
+        # Assert: the handoff produced the report and routed it to escalation
+        assert isinstance(result, IncidentReport)
+        assert result.incident_id == "inc-001"
+        assert agent.client.messages.create.call_count == 3  # detect -> diagnose -> report
+        mock_escalate.assert_awaited_once()
+        assert mock_escalate.await_args.args[0] is result
+
+    @pytest.mark.asyncio
+    async def test_no_anomaly_returns_none_and_skips_escalation(self, agent):
+        # Arrange: detection reports a healthy system (no anomaly keywords)
+        agent.client = _mock_client(
+            _api_response("All systems healthy. Flink jobs running normally, no issues found."),
+        )
+
+        # Act
+        with patch(
+            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+        ) as mock_escalate:
+            result = await agent.run_cycle()
+
+        # Assert: no diagnosis/report/escalation happens
+        assert result is None
+        assert agent.client.messages.create.call_count == 1
+        mock_escalate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_all_low_confidence_skips_report_agent(self, agent):
+        # Arrange: diagnosis returns only LOW-confidence claims
+        agent.client = _mock_client(
+            _api_response("Anomaly: latency spike detected"),
+            _api_response(_LOW_DIAGNOSIS_JSON),
+        )
+
+        # Act
+        with patch(
+            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+        ) as mock_escalate:
+            result = await agent.run_cycle()
+
+        # Assert: coordinator downgrades, never spawns the report agent or escalates
+        assert result is None
+        assert agent.client.messages.create.call_count == 2  # no third (report) call
+        mock_escalate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_report_agent_failure_uses_fallback(self, agent, monkeypatch):
+        # Arrange: report agent errors on every attempt
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_max_retries", 0)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_retry_base_delay", 0.0)
+        agent.client = _mock_client(
+            _api_response("Anomaly: backpressure on operator chain"),
+            _api_response(_DIAGNOSIS_JSON),
+            anthropic.APITimeoutError(request=None),
+        )
+
+        # Act
+        with patch(
+            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+        ) as mock_escalate:
+            result = await agent.run_cycle()
+
+        # Assert: a fallback incident is produced and still escalated
+        assert isinstance(result, IncidentReport)
+        assert "report agent unavailable" in result.title
+        mock_escalate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_diagnostic_failure_aborts_cycle(self, agent, monkeypatch):
+        # Arrange: diagnostic agent errors on every attempt
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_max_retries", 0)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_retry_base_delay", 0.0)
+        agent.client = _mock_client(
+            _api_response("Anomaly: checkpoint failure detected"),
+            anthropic.APITimeoutError(request=None),
+        )
+
+        # Act
+        with patch(
+            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+        ) as mock_escalate:
+            result = await agent.run_cycle()
+
+        # Assert: cycle aborts cleanly, nothing escalated
+        assert result is None
+        mock_escalate.assert_not_awaited()
