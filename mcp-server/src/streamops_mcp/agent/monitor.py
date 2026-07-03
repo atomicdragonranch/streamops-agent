@@ -50,7 +50,7 @@ class MonitorAgent:
     """
 
     def __init__(self, model: str | None = None, multi_agent: bool = True):
-        self.client = anthropic.Anthropic()
+        self.client = anthropic.AsyncAnthropic()
         self.model = model or config.agent_model
         self.multi_agent = multi_agent
         self.max_tool_rounds = config.agent_max_tool_rounds
@@ -213,7 +213,7 @@ class MonitorAgent:
         for round_num in range(self.max_tool_rounds):
             logger.debug("Detection loop round %d", round_num + 1)
 
-            response = self.client.messages.create(
+            response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=config.agent_max_tokens,
                 system=MONITOR_SYSTEM_PROMPT,
@@ -298,7 +298,7 @@ Use the available tools to determine the root cause. Respond with a JSON object 
                 logger.warning("Diagnostic Agent: messages ended on non-user role, ending early")
                 break
 
-            response = self.client.messages.create(
+            response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=config.agent_max_tokens,
                 system=system_prompt,
@@ -355,7 +355,7 @@ Use the available tools to determine the root cause. Respond with a JSON object 
             len(handoff.diagnosis_json),
         )
 
-        response = self.client.messages.create(
+        response = await self.client.messages.create(
             model=self.model,
             max_tokens=config.agent_max_tokens,
             system=REPORT_SYSTEM_PROMPT,
