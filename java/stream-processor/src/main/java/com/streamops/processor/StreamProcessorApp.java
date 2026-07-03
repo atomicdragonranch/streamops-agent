@@ -8,6 +8,7 @@ import com.streamops.proto.StreamEvent;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.serialization.SerializerConfigImpl;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.connector.base.DeliveryGuarantee;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
@@ -50,6 +51,7 @@ public class StreamProcessorApp {
         String groupId = resolve(config, "kafka.group.id", "KAFKA_GROUP_ID");
         long checkpointInterval = Long.parseLong(config.getProperty("flink.checkpoint.interval.ms", "30000"));
         int watermarkTolerance = Integer.parseInt(config.getProperty("flink.watermark.max.out.of.orderness.seconds", "5"));
+        int windowSeconds = Integer.parseInt(config.getProperty("flink.window.size.seconds", "30"));
 
         LOG.info("Configuring StreamProcessor: bootstrap={}, input={}, alerts={}, group={}, checkpoint={}ms",
             bootstrap, inputTopic, alertTopic, groupId, checkpointInterval);
@@ -86,7 +88,7 @@ public class StreamProcessorApp {
             .uid("metric-filter")
             .name("Filter Metrics")
             .keyBy(e -> e.getMetric().getComponent())
-            .window(TumblingEventTimeWindows.of(Duration.ofSeconds(30)))
+            .window(TumblingEventTimeWindows.of(Duration.ofSeconds(windowSeconds)))
             .process(new MetricAggregator())
             .uid("metric-aggregator")
             .name("30s Metric Aggregation");
@@ -100,6 +102,8 @@ public class StreamProcessorApp {
 
         KafkaSink<String> alertSink = KafkaSink.<String>builder()
             .setBootstrapServers(bootstrap)
+            // At-least-once so alerts aren't dropped on failure/restart (checkpointing is on).
+            .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
             .setRecordSerializer(
                 KafkaRecordSerializationSchema.builder()
                     .setTopic(alertTopic)
