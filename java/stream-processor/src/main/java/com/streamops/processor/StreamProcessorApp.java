@@ -3,7 +3,6 @@ package com.streamops.processor;
 import com.streamops.processor.functions.ProtobufKryoSerializer;
 import com.streamops.processor.functions.StreamEventDeserializer;
 import com.streamops.processor.operators.AnomalyDetector;
-import com.streamops.processor.operators.MetricAggregator;
 import com.streamops.proto.StreamEvent;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.serialization.SerializerConfigImpl;
@@ -15,7 +14,6 @@ import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,13 +23,11 @@ import java.time.Duration;
 import java.util.Properties;
 
 /**
- * Flink job entry point. Consumes StreamEvents from Kafka, runs two parallel
- * processing branches:
- *
- *   1. MetricAggregator: 30s tumbling windows, computes per-component stats
- *   2. AnomalyDetector:  keyed process, threshold-based anomaly detection
- *
- * Alerts flow to a separate Kafka topic for the AI agent to consume.
+ * Flink job entry point. Consumes StreamEvents from Kafka and runs the
+ * AnomalyDetector: a keyed process function that fires alerts on absolute
+ * thresholds and on EWMA-baseline deviation, keyed per (source, metric) so each
+ * metric keeps its own baseline. Alerts flow to a separate Kafka topic for the
+ * AI agent to consume.
  *
  * This job is submitted to a Flink cluster (not run standalone). The Flink runtime
  * provides the execution environment; dependencies are "provided" scope in Maven.
@@ -51,7 +47,6 @@ public class StreamProcessorApp {
         String groupId = resolve(config, "kafka.group.id", "KAFKA_GROUP_ID");
         long checkpointInterval = Long.parseLong(config.getProperty("flink.checkpoint.interval.ms", "30000"));
         int watermarkTolerance = Integer.parseInt(config.getProperty("flink.watermark.max.out.of.orderness.seconds", "5"));
-        int windowSeconds = Integer.parseInt(config.getProperty("flink.window.size.seconds", "30"));
 
         LOG.info("Configuring StreamProcessor: bootstrap={}, input={}, alerts={}, group={}, checkpoint={}ms",
             bootstrap, inputTopic, alertTopic, groupId, checkpointInterval);
@@ -80,22 +75,12 @@ public class StreamProcessorApp {
             .uid("kafka-source")
             .name("StreamEvents from Kafka");
 
-        LOG.info("Building processing topology: aggregation (30s windows) + anomaly detection");
+        LOG.info("Building processing topology: anomaly detection");
 
-        // Branch 1: Aggregate metrics per component in 30s windows
-        events
-            .filter(e -> e.hasMetric())
-            .uid("metric-filter")
-            .name("Filter Metrics")
-            .keyBy(e -> e.getMetric().getComponent())
-            .window(TumblingEventTimeWindows.of(Duration.ofSeconds(windowSeconds)))
-            .process(new MetricAggregator())
-            .uid("metric-aggregator")
-            .name("30s Metric Aggregation");
-
-        // Branch 2: Detect anomalies and emit alerts
+        // Detect anomalies and emit alerts. Key per (source, metric) so each metric
+        // maintains its own baseline; logs are keyed per source for error-rate tracking.
         DataStream<String> alerts = events
-            .keyBy(StreamEvent::getSource)
+            .keyBy(AnomalyDetector::keyFor)
             .process(new AnomalyDetector(config))
             .uid("anomaly-detector")
             .name("Anomaly Detector");
