@@ -50,7 +50,7 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 # E501 (line length) is deferred to a formatter pass: many tool/schema descriptions
-# are intentionally long LLM prompt strings a formatter won't split. Tracked in #67.
+# are intentionally long LLM prompt strings a formatter won't split. Tracked in #70.
 ignore = ["E501"]
 
 [tool.mypy]
