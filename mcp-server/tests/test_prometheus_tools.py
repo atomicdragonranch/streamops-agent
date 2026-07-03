@@ -3,9 +3,9 @@
 import pytest
 import respx
 from httpx import Response
-
-from streamops_mcp.tools.prometheus import register_prometheus_tools, _step_for_range
 from mcp.server.fastmcp import FastMCP
+
+from streamops_mcp.tools.prometheus import _step_for_range, register_prometheus_tools
 
 
 @pytest.fixture

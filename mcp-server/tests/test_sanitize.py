@@ -1,6 +1,5 @@
 """Tests for input sanitization of untrusted data sources."""
 
-import pytest
 
 from streamops_mcp.agent.sanitize import sanitize_tool_output
 

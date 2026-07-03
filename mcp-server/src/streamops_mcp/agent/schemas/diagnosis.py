@@ -5,12 +5,12 @@ The agent must produce a structured diagnosis with claim-source attribution,
 not free-form text.
 """
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class Confidence(str, Enum):
+class Confidence(StrEnum):
     """Confidence level for a diagnostic claim based on corroborating evidence."""
 
     HIGH = "HIGH"

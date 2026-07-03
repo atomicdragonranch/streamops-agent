@@ -6,9 +6,9 @@ Uses respx to mock httpx requests to the Flink REST API.
 import pytest
 import respx
 from httpx import Response
+from mcp.server.fastmcp import FastMCP
 
 from streamops_mcp.tools.flink import register_flink_tools
-from mcp.server.fastmcp import FastMCP
 
 
 @pytest.fixture

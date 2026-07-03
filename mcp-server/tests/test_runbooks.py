@@ -1,6 +1,5 @@
 """Tests for runbook loading and injection."""
 
-import pytest
 
 from streamops_mcp.prompts import list_runbooks, load_runbook
 

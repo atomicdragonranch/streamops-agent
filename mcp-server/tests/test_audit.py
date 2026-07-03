@@ -2,8 +2,6 @@
 
 import json
 
-import pytest
-
 from streamops_mcp.agent.audit import AuditLogger
 from streamops_mcp.agent.schemas import (
     DiagnosisReport,

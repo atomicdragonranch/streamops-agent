@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from streamops_mcp.agent.monitor import MonitorAgent
-from streamops_mcp.agent.schemas import DiagnosisReport
 from streamops_mcp.agent.tools import ALL_TOOLS
 from streamops_mcp.prompts import list_runbooks, load_runbook
 
@@ -103,7 +102,7 @@ class TestSteeringRunbookAlignment:
 
         # Assert
         if scenario["expected"].get("runbook_should_match", False):
-            assert len(result) > 0, f"Expected runbook match for context but got empty"
+            assert len(result) > 0, "Expected runbook match for context but got empty"
 
 
 class TestSteeringDiagnosisAlignment:

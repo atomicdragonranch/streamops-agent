@@ -36,7 +36,11 @@ def _decode_raw(data: bytes) -> dict:
     from the .proto definition.
     """
     from google.protobuf.internal.decoder import _DecodeVarint
-    from google.protobuf.internal.wire_format import WIRETYPE_VARINT, WIRETYPE_LENGTH_DELIMITED, WIRETYPE_FIXED64
+    from google.protobuf.internal.wire_format import (
+        WIRETYPE_FIXED64,
+        WIRETYPE_LENGTH_DELIMITED,
+        WIRETYPE_VARINT,
+    )
 
     result = {}
     pos = 0
