@@ -7,6 +7,7 @@ raw events and the ability to search log messages by content. This is the
 
 import json
 import logging
+from typing import Any
 
 from confluent_kafka import Consumer, TopicPartition
 from mcp.server.fastmcp import FastMCP
@@ -81,7 +82,7 @@ def register_event_tools(mcp: FastMCP):
 
             consumer.assign(assignments)
 
-            events = []
+            events: list[dict[str, Any]] = []
             empty_polls = 0
             while len(events) < count and empty_polls < config.events_empty_poll_threshold:
                 msg = consumer.poll(timeout=config.events_poll_timeout)
@@ -92,7 +93,10 @@ def register_event_tools(mcp: FastMCP):
                     logger.warning("Kafka poll error: %s", msg.error())
                     continue
 
-                event = _deserialize_event(msg.value())
+                value = msg.value()
+                if value is None:
+                    continue
+                event = _deserialize_event(value)
                 if event is None:
                     continue
 
@@ -163,7 +167,7 @@ def register_event_tools(mcp: FastMCP):
 
             consumer.assign(assignments)
 
-            matches = []
+            matches: list[dict[str, Any]] = []
             messages_scanned = 0
             empty_polls = 0
 
@@ -176,7 +180,10 @@ def register_event_tools(mcp: FastMCP):
                     continue
 
                 messages_scanned += 1
-                event = _deserialize_event(msg.value())
+                value = msg.value()
+                if value is None:
+                    continue
+                event = _deserialize_event(value)
                 if event is None:
                     continue
 

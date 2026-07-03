@@ -55,6 +55,10 @@ jobs:
         working-directory: mcp-server
         run: uv run ruff check
 
+      - name: Type check (mypy)
+        working-directory: mcp-server
+        run: uv run mypy
+
       - name: Pre-commit validation
         run: python scripts/check.py
 

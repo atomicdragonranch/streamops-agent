@@ -3,6 +3,7 @@ from streamops_mcp.agent.schemas.diagnosis import (
     Confidence,
     ConflictRecord,
     DiagnosisReport,
+    RootCause,
     SourceRecord,
 )
 from streamops_mcp.agent.schemas.handoff import (
@@ -19,6 +20,7 @@ __all__ = [
     "DiagnosticToReportHandoff",
     "IncidentReport",
     "MonitorToDiagnosticHandoff",
+    "RootCause",
     "Severity",
     "SourceRecord",
 ]

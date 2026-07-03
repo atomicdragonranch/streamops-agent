@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from streamops_mcp.agent.schemas import DiagnosisReport, IncidentReport
 from streamops_mcp.config import config
@@ -32,7 +33,7 @@ class AuditLogger:
         diagnosis: DiagnosisReport | None = None,
         human_approved: bool | None = None,
     ) -> dict:
-        entry = {
+        entry: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "incident_id": report.incident_id,
             "title": report.title,
