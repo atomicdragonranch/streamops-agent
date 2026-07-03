@@ -35,7 +35,8 @@ def _decode_raw(data: bytes) -> dict:
     the MCP tools know which field numbers map to which payload types
     from the .proto definition.
     """
-    from google.protobuf.internal.decoder import _DecodeVarint
+    # Private protobuf internal (works at runtime; not declared in the type stubs).
+    from google.protobuf.internal.decoder import _DecodeVarint  # type: ignore[attr-defined]
     from google.protobuf.internal.wire_format import (
         WIRETYPE_FIXED64,
         WIRETYPE_LENGTH_DELIMITED,

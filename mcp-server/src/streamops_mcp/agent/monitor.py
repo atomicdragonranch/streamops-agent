@@ -17,6 +17,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import anthropic
 
@@ -28,6 +29,7 @@ from streamops_mcp.agent.schemas import (
     DiagnosticToReportHandoff,
     IncidentReport,
     MonitorToDiagnosticHandoff,
+    RootCause,
     Severity,
 )
 from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS
@@ -75,7 +77,7 @@ class MonitorAgent:
         """
         max_retries = config.agent_max_retries
         base_delay = config.agent_retry_base_delay
-        last_exc = None
+        last_exc: Exception | None = None
 
         for attempt in range(1 + max_retries):
             try:
@@ -93,6 +95,7 @@ class MonitorAgent:
                 logger.info("Retrying %s in %.1fs", name, delay)
                 await asyncio.sleep(delay)
 
+        assert last_exc is not None  # pragma: no cover
         raise last_exc  # pragma: no cover
 
     async def run_cycle(self) -> IncidentReport | None:
@@ -207,17 +210,19 @@ class MonitorAgent:
 
         Returns the assistant's final text if anomalies were found, None if healthy.
         """
-        messages = [{"role": "user", "content": "Run a health check on the streaming infrastructure. Check Flink jobs, consumer lag, and recent events. Report any anomalies you find."}]
+        messages: list[dict[str, Any]] = [{"role": "user", "content": "Run a health check on the streaming infrastructure. Check Flink jobs, consumer lag, and recent events. Report any anomalies you find."}]
 
         for round_num in range(self.max_tool_rounds):
             logger.debug("Detection loop round %d", round_num + 1)
 
+            # The Anthropic SDK accepts our dict-built tool/message payloads at runtime; its
+            # TypedDict params are stricter than our dynamic construction, hence the ignores.
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=config.agent_max_tokens,
                 system=MONITOR_SYSTEM_PROMPT,
-                tools=ALL_TOOLS,
-                messages=messages,
+                tools=ALL_TOOLS,  # type: ignore[arg-type]
+                messages=messages,  # type: ignore[arg-type]
             )
 
             assistant_text = ""
@@ -282,7 +287,7 @@ class MonitorAgent:
         if runbook_section:
             system_prompt = system_prompt + "\n\n" + runbook_section
 
-        messages = [{
+        messages: list[dict[str, Any]] = [{
             "role": "user",
             "content": f"""Investigate the following anomaly detected by the monitoring system:
 
@@ -297,12 +302,13 @@ Use the available tools to determine the root cause. Respond with a JSON object 
                 logger.warning("Diagnostic Agent: messages ended on non-user role, ending early")
                 break
 
+            # See the note in _detect_anomalies: dict payloads are runtime-valid for the SDK.
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=config.agent_max_tokens,
                 system=system_prompt,
-                tools=DIAGNOSTIC_TOOLS,
-                messages=messages,
+                tools=DIAGNOSTIC_TOOLS,  # type: ignore[arg-type]
+                messages=messages,  # type: ignore[arg-type]
             )
 
             assistant_text = ""
@@ -412,12 +418,12 @@ Respond with a JSON object matching the IncidentReport schema:
             anomaly_type="unknown",
             detected_at=datetime.now(UTC).isoformat(),
             affected_components=[],
-            root_cause={
-                "summary": "See detection notes below",
-                "confidence": "medium",
-                "reasoning": detection_text[:1000],
-                "supporting_metrics": [],
-            },
+            root_cause=RootCause(
+                summary="See detection notes below",
+                confidence="medium",
+                reasoning=detection_text[:1000],
+                supporting_metrics=[],
+            ),
             tools_used=[],
             raw_evidence=[detection_text[:500]],
         )
@@ -433,12 +439,12 @@ Respond with a JSON object matching the IncidentReport schema:
                 anomaly_type="parse_error",
                 detected_at=datetime.now(UTC).isoformat(),
                 affected_components=[],
-                root_cause={
-                    "summary": "Agent response could not be parsed as structured output",
-                    "confidence": "low",
-                    "reasoning": text[:500],
-                    "supporting_metrics": [],
-                },
+                root_cause=RootCause(
+                    summary="Agent response could not be parsed as structured output",
+                    confidence="low",
+                    reasoning=text[:500],
+                    supporting_metrics=[],
+                ),
                 tools_used=[],
                 raw_evidence=[text[:500]],
             )

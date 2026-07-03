@@ -124,4 +124,4 @@ ALL_TOOLS = FLINK_TOOLS + KAFKA_TOOLS + PROMETHEUS_TOOLS + EVENT_TOOLS
 DIAGNOSTIC_TOOLS = ALL_TOOLS
 
 # Report agent gets no tools (it synthesizes from the diagnosis, doesn't query)
-REPORT_TOOLS = []
+REPORT_TOOLS: list[dict[str, object]] = []
