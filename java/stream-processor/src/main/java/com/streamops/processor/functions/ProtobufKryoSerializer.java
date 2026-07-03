@@ -9,6 +9,8 @@ import com.google.protobuf.InvalidProtocolBufferException;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Kryo serializer that delegates to Protobuf's own binary format instead of
@@ -17,6 +19,10 @@ import java.lang.reflect.Method;
  * CollectionSerializer.
  */
 public class ProtobufKryoSerializer<T extends GeneratedMessageV3> extends Serializer<T> {
+
+    // parseFrom(byte[]) is looked up reflectively once per message class and cached;
+    // the lookup otherwise runs on the hot path (once per record).
+    private static final Map<Class<?>, Method> PARSE_FROM_CACHE = new ConcurrentHashMap<>();
 
     @Override
     public void write(Kryo kryo, Output output, T message) {
@@ -31,15 +37,25 @@ public class ProtobufKryoSerializer<T extends GeneratedMessageV3> extends Serial
         int length = input.readVarInt(true);
         byte[] bytes = input.readBytes(length);
         try {
-            Method parseFrom = type.getMethod("parseFrom", byte[].class);
-            return (T) parseFrom.invoke(null, bytes);
+            return (T) parseFromFor(type).invoke(null, bytes);
         } catch (InvocationTargetException e) {
             if (e.getCause() instanceof InvalidProtocolBufferException) {
                 throw new RuntimeException("Failed to parse protobuf message", e.getCause());
             }
             throw new RuntimeException(e);
         } catch (ReflectiveOperationException e) {
-            throw new RuntimeException("Protobuf class missing parseFrom(byte[]): " + type.getName(), e);
+            throw new RuntimeException("Failed to invoke parseFrom on " + type.getName(), e);
         }
+    }
+
+    private static Method parseFromFor(Class<?> type) {
+        return PARSE_FROM_CACHE.computeIfAbsent(type, t -> {
+            try {
+                return t.getMethod("parseFrom", byte[].class);
+            } catch (NoSuchMethodException e) {
+                throw new IllegalStateException(
+                    "Protobuf class missing parseFrom(byte[]): " + t.getName(), e);
+            }
+        });
     }
 }

@@ -90,6 +90,13 @@
                 <version>4.0.0-2.0</version>
             </dependency>
             <dependency>
+                <!-- Provides DeliveryGuarantee etc.; supplied by the Flink runtime -->
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-connector-base</artifactId>
+                <version>${flink.version}</version>
+                <scope>provided</scope>
+            </dependency>
+            <dependency>
                 <groupId>org.apache.flink</groupId>
                 <artifactId>flink-json</artifactId>
                 <version>${flink.version}</version>
