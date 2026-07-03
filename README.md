@@ -3,7 +3,7 @@
 [![CI](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
-[![Tests](https://img.shields.io/badge/tests-197%20passing-brightgreen.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/atomicdragonranch/streamops-agent/actions/workflows/ci.yml)
 
 AI-powered operations agent for streaming infrastructure monitoring. Built with Apache Flink 2.0, Kafka, and Claude to detect anomalies, diagnose root causes, and escalate incidents in real-time pipelines.
 
@@ -28,7 +28,7 @@ graph TB
         K[Apache Kafka<br/>KRaft Mode]
         FP[Flink Stream Processor<br/>Flink 2.0.2]
         MA[MetricAggregator<br/>30s Tumbling Windows]
-        AD[AnomalyDetector<br/>Keyed State + EMA]
+        AD[AnomalyDetector<br/>Keyed State + Thresholds]
     end
 
     subgraph "Python MCP Server"
@@ -239,7 +239,7 @@ streamops-agent/
         schemas/              # Pydantic models (DiagnosisReport, IncidentReport)
         main.py               # CLI entry point
       config.py               # pydantic-settings config
-    tests/                    # 197 Python tests
+    tests/                    # Python test suite
   config/
     prometheus.yml            # Scrape config for Flink JM + TM metrics
     grafana/provisioning/
@@ -257,8 +257,8 @@ streamops-agent/
 |--------|-------|-----------|
 | Event Simulator | 23 | JUnit 5, AssertJ |
 | Stream Processor | 14 | JUnit 5, AssertJ, Mockito |
-| MCP Server + Agent | 197 | pytest |
-| **Total** | **234** | |
+| MCP Server + Agent | 202 | pytest |
+| **Total** | **239** | |
 
 ## Quick Start
 
@@ -366,7 +366,7 @@ Another application is using the Grafana port. Edit `docker-compose.yml` and cha
 
 **Simulator produces events but Flink shows LAG = 0 and no alerts**
 
-This is normal during warm-up. The AnomalyDetector uses exponential moving averages (EMA) that need several data points before triggering. Run the simulator for at least 30 seconds with an anomaly scenario, then check the `stream-alerts` topic in Kafka UI.
+This is normal during warm-up. The anomaly scenarios ramp up gradually, and the AnomalyDetector emits an alert once a metric crosses its configured threshold. Run the simulator for at least 30 seconds with an anomaly scenario, then check the `stream-alerts` topic in Kafka UI.
 
 ## Draft-Only Output Contract
 
