@@ -2,14 +2,20 @@ package com.streamops.processor.functions;
 
 import com.streamops.proto.MetricEvent;
 import com.streamops.proto.StreamEvent;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.metrics.SimpleCounter;
 import org.apache.flink.util.Collector;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class StreamEventDeserializerTest {
 
@@ -88,6 +94,30 @@ class StreamEventDeserializerTest {
 
         // Assert
         assertThat(typeInfo.getTypeClass()).isEqualTo(StreamEvent.class);
+    }
+
+    @Test
+    void deserializationErrorsAreRecordedAsAMetric() throws Exception {
+        // Arrange: open() registers a real counter via a mocked metric group
+        StreamEventDeserializer deserializer = new StreamEventDeserializer();
+        Counter errorCounter = new SimpleCounter();
+        MetricGroup metrics = mock(MetricGroup.class);
+        when(metrics.counter("deserializationErrors")).thenReturn(errorCounter);
+        DeserializationSchema.InitializationContext ctx =
+            mock(DeserializationSchema.InitializationContext.class);
+        when(ctx.getMetricGroup()).thenReturn(metrics);
+        deserializer.open(ctx);
+
+        byte[] garbage = "this is not protobuf".getBytes();
+        ConsumerRecord<byte[], byte[]> record = new ConsumerRecord<>("test-topic", 0, 0L, null, garbage);
+        List<StreamEvent> collected = new ArrayList<>();
+
+        // Act
+        deserializer.deserialize(record, new ListCollector<>(collected));
+
+        // Assert: the bad record is dropped and the failure is counted as a metric
+        assertThat(collected).isEmpty();
+        assertThat(errorCounter.getCount()).isEqualTo(1L);
     }
 
     /**
