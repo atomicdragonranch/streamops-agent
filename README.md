@@ -28,7 +28,7 @@ graph TB
         K[Apache Kafka<br/>KRaft Mode]
         FP[Flink Stream Processor<br/>Flink 2.0.2]
         MA[MetricAggregator<br/>30s Tumbling Windows]
-        AD[AnomalyDetector<br/>Keyed State + Thresholds]
+        AD[AnomalyDetector<br/>Thresholds + EMA Baseline]
     end
 
     subgraph "Python MCP Server"
@@ -227,7 +227,7 @@ streamops-agent/
     flink-parent/             # Shared Flink dependency management (Maven parent POM)
     proto/                    # Protobuf schema (StreamEvent)
     event-simulator/          # Standalone Kafka producer, 6 anomaly scenarios
-    stream-processor/         # Flink 2.0 job (MetricAggregator + AnomalyDetector)
+    stream-processor/         # Flink 2.0 job (AnomalyDetector)
   mcp-server/
     src/streamops_mcp/
       tools/                  # 8 MCP observability tools (Flink, Kafka, Prometheus, Events)
@@ -366,7 +366,7 @@ Another application is using the Grafana port. Edit `docker-compose.yml` and cha
 
 **Simulator produces events but Flink shows LAG = 0 and no alerts**
 
-This is normal during warm-up. The anomaly scenarios ramp up gradually, and the AnomalyDetector emits an alert once a metric crosses its configured threshold. Run the simulator for at least 30 seconds with an anomaly scenario, then check the `stream-alerts` topic in Kafka UI.
+This is normal during warm-up. The AnomalyDetector alerts on absolute thresholds immediately, but the EMA-baseline-deviation signal only fires after each metric's baseline has seen `anomaly.warmup.samples` values (default 20). Run the simulator for at least 30 seconds with an anomaly scenario, then check the `stream-alerts` topic in Kafka UI.
 
 ## Draft-Only Output Contract
 
