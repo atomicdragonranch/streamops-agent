@@ -27,7 +27,6 @@ graph TB
         ES[Event Simulator<br/>Kafka Producer]
         K[Apache Kafka<br/>KRaft Mode]
         FP[Flink Stream Processor<br/>Flink 2.0.2]
-        MA[MetricAggregator<br/>30s Tumbling Windows]
         AD[AnomalyDetector<br/>Thresholds + EMA Baseline]
     end
 
@@ -53,7 +52,6 @@ graph TB
 
     ES -->|Protobuf| K
     K --> FP
-    FP --> MA
     FP --> AD
     AD -->|Alerts| K
     FP -.->|Metrics| PROM
@@ -133,8 +131,6 @@ flowchart LR
     subgraph "Stream Processing"
         KT[Kafka Topic<br/>stream-events]
         DESER[StreamEventDeserializer<br/>Protobuf]
-        SPLIT{Event Type?}
-        AGG[MetricAggregator<br/>30s Windows]
         DET[AnomalyDetector<br/>Keyed State]
         ALERT[Kafka Topic<br/>stream-alerts]
     end
@@ -143,9 +139,7 @@ flowchart LR
     SR --> SIM
     MG & LG & HG -->|Protobuf| KT
     KT --> DESER
-    DESER --> SPLIT
-    SPLIT -->|Metric| AGG
-    SPLIT -->|All| DET
+    DESER --> DET
     DET -->|Threshold breach| ALERT
 ```
 
