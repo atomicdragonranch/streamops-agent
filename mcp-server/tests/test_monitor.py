@@ -4,6 +4,7 @@ Tests the agent's internal logic (anomaly detection heuristic, JSON extraction,
 parsing, retry/fallback behavior) without making actual Claude API calls.
 """
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -16,11 +17,14 @@ from streamops_mcp.agent.monitor import MonitorAgent
 from streamops_mcp.agent.schemas import (
     ClaimRecord,
     Confidence,
+    DetectedAnomaly,
     DiagnosisReport,
     IncidentReport,
+    RootCause,
     Severity,
     SourceRecord,
 )
+from streamops_mcp.agent.schemas.diagnosis import AffectedComponent
 
 
 def _fake_response(status_code: int) -> httpx.Response:
@@ -884,3 +888,179 @@ class TestIncidentAttribution:
         # Assert
         assert len(report.sources) == len(diagnosis.sources)
         assert len(report.supporting_claims) == len(diagnosis.claims)
+
+
+def _anom(anomaly_type="unknown") -> DetectedAnomaly:
+    return DetectedAnomaly(
+        anomaly_type=anomaly_type, summary="ambiguous anomaly", detected_at="2026-07-09T12:00:00Z"
+    )
+
+
+def _diag(
+    anomaly_type="latency_spike", confidence="HIGH", sid="src-001", cid="C01"
+) -> DiagnosisReport:
+    return DiagnosisReport(
+        anomaly_type=anomaly_type,
+        detected_at="2026-07-09T12:00:00Z",
+        sources=[
+            SourceRecord(
+                source_id=sid, tool_name="query_flink_jobs", retrieved_at="t", raw_output="{}"
+            )
+        ],
+        claims=[ClaimRecord(claim_id=cid, text="a finding", source_id=sid, confidence=confidence)],
+        affected_components=[
+            AffectedComponent(name="kafka", role="consumer", status="degraded", evidence="lag")
+        ],
+        root_cause=RootCause(
+            summary=f"{anomaly_type} root cause", confidence="medium", reasoning="r"
+        ),
+        tools_used=["query_flink_jobs"],
+    )
+
+
+class TestForkDiagnostics:
+    """Fork-style parallel diagnostic exploration (issue #67)."""
+
+    @pytest.mark.asyncio
+    async def test_single_agent_path_when_forks_one(self, agent, monkeypatch):
+        # Arrange: default config -> one diagnostic agent, no hypothesis
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_diagnostic_forks", 1)
+        seen = {"count": 0, "hypothesis": "sentinel"}
+
+        async def fake_spawn(anomaly, hypothesis=None):
+            seen["count"] += 1
+            seen["hypothesis"] = hypothesis
+            return _diag()
+
+        monkeypatch.setattr(agent, "_spawn_diagnostic_agent", fake_spawn)
+
+        # Act
+        result = await agent._run_diagnostics(_anom())
+
+        # Assert
+        assert result is not None
+        assert seen["count"] == 1
+        assert seen["hypothesis"] is None
+
+    @pytest.mark.asyncio
+    async def test_forks_run_concurrently_with_distinct_hypotheses(self, agent, monkeypatch):
+        # Arrange: 3 forks; a barrier proves they run concurrently, not sequentially
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_diagnostic_forks", 3)
+        barrier = asyncio.Barrier(3)
+        seen_hypotheses = []
+
+        async def fake_spawn(anomaly, hypothesis=None):
+            seen_hypotheses.append(hypothesis)
+            # If forks were sequential, only 1 of 3 would reach the barrier and
+            # this wait would time out. Concurrent execution releases it at once.
+            await asyncio.wait_for(barrier.wait(), timeout=2.0)
+            return _diag()
+
+        monkeypatch.setattr(agent, "_spawn_diagnostic_agent", fake_spawn)
+
+        # Act
+        result = await agent._run_diagnostics(_anom())
+
+        # Assert
+        assert result is not None
+        assert len(seen_hypotheses) == 3
+        assert len(set(seen_hypotheses)) == 3  # each fork got a distinct hypothesis
+
+    @pytest.mark.asyncio
+    async def test_partial_fork_failure_aggregates_survivors(self, agent, monkeypatch):
+        # Arrange: 3 forks, one dies after retries
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_diagnostic_forks", 3)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_max_retries", 0)
+
+        async def fake_spawn(anomaly, hypothesis=None):
+            if hypothesis and "Data-side" in hypothesis:
+                raise anthropic.APITimeoutError(request=None)
+            return _diag()
+
+        monkeypatch.setattr(agent, "_spawn_diagnostic_agent", fake_spawn)
+
+        # Act
+        result = await agent._run_diagnostics(_anom())
+
+        # Assert: survivors aggregated, not aborted
+        assert result is not None
+        assert len(result.claims) == 2  # two forks survived, one per surviving fork
+
+    @pytest.mark.asyncio
+    async def test_all_forks_fail_aborts_cycle(self, agent, monkeypatch):
+        # Arrange: every fork dies
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_diagnostic_forks", 3)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_max_retries", 0)
+
+        async def fake_spawn(anomaly, hypothesis=None):
+            raise anthropic.APITimeoutError(request=None)
+
+        monkeypatch.setattr(agent, "_spawn_diagnostic_agent", fake_spawn)
+
+        # Act
+        result = await agent._run_diagnostics(_anom())
+
+        # Assert
+        assert result is None
+
+    def test_merge_single_returns_input(self):
+        # Arrange
+        d = _diag()
+
+        # Act + Assert: nothing to merge
+        assert MonitorAgent._merge_fork_diagnoses([d]) is d
+
+    def test_merge_namespaces_ids_and_preserves_attribution(self):
+        # Arrange: two forks that agree
+        d1 = _diag(anomaly_type="latency_spike")
+        d2 = _diag(anomaly_type="latency_spike")
+
+        # Act
+        merged = MonitorAgent._merge_fork_diagnoses([d1, d2])
+
+        # Assert: ids namespaced per fork (no collision), attribution intact (construction validated)
+        assert {s.source_id for s in merged.sources} == {"f0:src-001", "f1:src-001"}
+        assert {c.claim_id for c in merged.claims} == {"f0:C01", "f1:C01"}
+        for claim in merged.claims:
+            assert claim.source_id in {s.source_id for s in merged.sources}
+        # agreement -> no cross-fork conflict
+        assert not [c for c in merged.conflicts if c.topic == "cross-fork root-cause disagreement"]
+
+    def test_merge_creates_cross_fork_conflict_on_disagreement(self):
+        # Arrange: forks disagree on anomaly_type; fork 0 is HIGH (primary), fork 1 MEDIUM
+        d1 = _diag(anomaly_type="latency_spike", confidence="HIGH")
+        d2 = _diag(anomaly_type="backpressure", confidence="MEDIUM")
+
+        # Act
+        merged = MonitorAgent._merge_fork_diagnoses([d1, d2])
+
+        # Assert: a cross-fork conflict, unresolved, referencing real merged claims
+        xf = [c for c in merged.conflicts if c.topic == "cross-fork root-cause disagreement"]
+        assert len(xf) == 1
+        assert xf[0].resolution == "unresolved"
+        claim_ids = {c.claim_id for c in merged.claims}
+        assert xf[0].claim_a_id in claim_ids
+        assert xf[0].claim_b_id in claim_ids
+        # primary (highest-confidence) fork drives the merged headline
+        assert merged.anomaly_type == "latency_spike"
+
+    @pytest.mark.asyncio
+    async def test_run_cycle_fork_path_end_to_end(self, agent, monkeypatch):
+        # Arrange: 3 forks through the full cycle (detect -> 3 diagnostics -> report)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_diagnostic_forks", 3)
+        agent.client = _mock_client(
+            _api_response("Anomaly detected: consumer lag spike on partition 2"),
+            _api_response(_DIAGNOSIS_JSON),
+            _api_response(_DIAGNOSIS_JSON),
+            _api_response(_DIAGNOSIS_JSON),
+            _api_response(_REPORT_JSON),
+        )
+
+        # Act
+        with patch("streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock) as mock_escalate:
+            result = await agent.run_cycle()
+
+        # Assert: 1 detect + 3 concurrent forks + 1 report, escalated once
+        assert isinstance(result, IncidentReport)
+        assert agent.client.messages.create.call_count == 5
+        mock_escalate.assert_awaited_once()

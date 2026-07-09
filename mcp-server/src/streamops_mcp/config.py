@@ -60,6 +60,12 @@ class StreamOpsConfig(BaseSettings):
     agent_max_retries: int = 2
     agent_retry_base_delay: float = 1.0
 
+    # Fork-style parallel diagnostic exploration (issue #67). Number of diagnostic
+    # sub-agents to fan out concurrently, each seeded with a distinct hypothesis.
+    # Default 1 preserves single-agent behavior; >1 fans out (capped at the number
+    # of defined hypotheses). Fan-out adds cost/latency, so raise it deliberately.
+    agent_diagnostic_forks: int = 1
+
     # Input sanitization
     agent_sanitize_max_output_chars: int = 20_000
 
