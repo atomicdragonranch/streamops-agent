@@ -25,6 +25,7 @@ from streamops_mcp.agent.escalation import escalate
 from streamops_mcp.agent.executor import execute_tool
 from streamops_mcp.agent.schemas import (
     Confidence,
+    ConflictRecord,
     DetectedAnomaly,
     DiagnosisReport,
     DiagnosticToReportHandoff,
@@ -47,6 +48,24 @@ logger = logging.getLogger("streamops-mcp.monitor")
 MONITOR_SYSTEM_PROMPT = load_prompt("monitor")
 DIAGNOSTIC_SYSTEM_PROMPT = load_prompt("diagnostic")
 REPORT_SYSTEM_PROMPT = load_prompt("report")
+
+# Distinct investigative angles seeded into parallel diagnostic forks (issue #67)
+# so each explores a different candidate cause instead of one line of reasoning
+# tunnel-visioning on an ambiguous anomaly. A fan-out of N takes the first N.
+DIAGNOSTIC_HYPOTHESES = [
+    "Resource saturation: CPU, memory/heap, or GC pressure on the affected component.",
+    "Data-side cause: partition skew, hot keys, or a surge in input volume.",
+    "External dependency: a downstream sink, source, or coordination service degrading.",
+    "Configuration or deployment change: a recent config, scaling, or version change.",
+]
+
+# Confidence ordering for picking a fork's representative claim and the primary fork.
+_CONFIDENCE_RANK = {
+    Confidence.HIGH: 3,
+    Confidence.MEDIUM: 2,
+    Confidence.LOW: 1,
+    Confidence.UNSOURCED: 0,
+}
 
 
 class MonitorAgent:
@@ -132,16 +151,8 @@ class MonitorAgent:
                 return None
 
             if self.multi_agent:
-                try:
-                    diagnosis = await self._retry_subagent(
-                        "Diagnostic Agent",
-                        lambda: self._spawn_diagnostic_agent(detection),
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "Diagnostic Agent failed after retries, cycle aborted: %s",
-                        exc,
-                    )
+                diagnosis = await self._run_diagnostics(detection)
+                if diagnosis is None:
                     return None
 
                 self._log_confidence_distribution(diagnosis)
@@ -192,6 +203,170 @@ class MonitorAgent:
             return report
         finally:
             reset_correlation_id(token)
+
+    async def _run_diagnostics(self, anomaly: DetectedAnomaly) -> DiagnosisReport | None:
+        """Diagnose the anomaly, single-agent or fork-style (issue #67).
+
+        With ``agent_diagnostic_forks <= 1`` this is the original single
+        Diagnostic agent. With more, it fans out N agents concurrently, each
+        seeded with a distinct hypothesis, then merges the survivors. Returns
+        None only if the diagnosis could not be produced at all (single agent
+        failed, or every fork failed after retries).
+        """
+        fork_count = min(config.agent_diagnostic_forks, len(DIAGNOSTIC_HYPOTHESES))
+
+        if fork_count <= 1:
+            try:
+                return await self._retry_subagent(
+                    "Diagnostic Agent",
+                    lambda: self._spawn_diagnostic_agent(anomaly),
+                )
+            except Exception as exc:
+                logger.error("Diagnostic Agent failed after retries, cycle aborted: %s", exc)
+                return None
+
+        hypotheses = DIAGNOSTIC_HYPOTHESES[:fork_count]
+        logger.info("Fanning out %d diagnostic forks", fork_count)
+
+        async def _fork(index: int, hypothesis: str) -> DiagnosisReport:
+            return await self._retry_subagent(
+                f"Diagnostic Agent fork {index}",
+                lambda: self._spawn_diagnostic_agent(anomaly, hypothesis=hypothesis),
+            )
+
+        # gather (not a loop) so the forks truly run concurrently on a shared baseline.
+        results = await asyncio.gather(
+            *(_fork(i, h) for i, h in enumerate(hypotheses)),
+            return_exceptions=True,
+        )
+        survivors = [r for r in results if isinstance(r, DiagnosisReport)]
+        failed = fork_count - len(survivors)
+
+        if not survivors:
+            logger.error("All %d diagnostic forks failed after retries, cycle aborted", fork_count)
+            return None
+        if failed:
+            logger.warning(
+                "%d of %d diagnostic forks failed; aggregating %d survivor(s)",
+                failed,
+                fork_count,
+                len(survivors),
+            )
+        return self._merge_fork_diagnoses(survivors)
+
+    @classmethod
+    def _merge_fork_diagnoses(cls, diagnoses: list[DiagnosisReport]) -> DiagnosisReport:
+        """Merge parallel fork diagnoses into one, preserving attribution.
+
+        Each fork's ids are namespaced (``f{i}:``) so merged sources, claims, and
+        conflicts never collide. Forks that concluded a different anomaly_type
+        than the primary (highest-confidence) fork produce a cross-fork
+        ConflictRecord: annotated, unresolved, and left for the coordinator's
+        escalation path (issue #82) rather than silently picking a winner.
+        """
+        if len(diagnoses) == 1:
+            return diagnoses[0]
+
+        merged_sources = []
+        merged_claims = []
+        merged_conflicts = []
+        reps: list[tuple[int, str | None, str, str]] = []  # (fork, rep_claim_id, type, summary)
+
+        for i, d in enumerate(diagnoses):
+            prefix = f"f{i}:"
+            for s in d.sources:
+                merged_sources.append(s.model_copy(update={"source_id": prefix + s.source_id}))
+            for c in d.claims:
+                merged_claims.append(
+                    c.model_copy(
+                        update={"claim_id": prefix + c.claim_id, "source_id": prefix + c.source_id}
+                    )
+                )
+            for cf in d.conflicts:
+                merged_conflicts.append(
+                    cf.model_copy(
+                        update={
+                            "conflict_id": prefix + cf.conflict_id,
+                            "claim_a_id": prefix + cf.claim_a_id,
+                            "claim_b_id": prefix + cf.claim_b_id,
+                        }
+                    )
+                )
+            reps.append(
+                (i, cls._representative_claim_id(d, prefix), d.anomaly_type, d.root_cause.summary)
+            )
+
+        primary = cls._primary_fork_index(diagnoses)
+        merged_conflicts.extend(cls._cross_fork_conflicts(reps, primary))
+
+        chosen = diagnoses[primary]
+        return DiagnosisReport(
+            anomaly_type=chosen.anomaly_type,
+            detected_at=min(d.detected_at for d in diagnoses),
+            sources=merged_sources,
+            claims=merged_claims,
+            conflicts=merged_conflicts,
+            affected_components=[c for d in diagnoses for c in d.affected_components],
+            root_cause=chosen.root_cause,
+            tools_used=sorted({t for d in diagnoses for t in d.tools_used}),
+            raw_evidence=[e for d in diagnoses for e in d.raw_evidence],
+        )
+
+    @classmethod
+    def _representative_claim_id(cls, diagnosis: DiagnosisReport, prefix: str) -> str | None:
+        """The namespaced id of a fork's highest-confidence claim, or None if it has none."""
+        if not diagnosis.claims:
+            return None
+        best = max(diagnosis.claims, key=lambda c: _CONFIDENCE_RANK[c.confidence])
+        return prefix + best.claim_id
+
+    @classmethod
+    def _primary_fork_index(cls, diagnoses: list[DiagnosisReport]) -> int:
+        """Index of the fork whose best claim has the highest confidence (ties: lowest index)."""
+
+        def fork_rank(i: int) -> int:
+            claims = diagnoses[i].claims
+            return max((_CONFIDENCE_RANK[c.confidence] for c in claims), default=-1)
+
+        return max(range(len(diagnoses)), key=fork_rank)
+
+    @staticmethod
+    def _cross_fork_conflicts(
+        reps: list[tuple[int, str | None, str, str]], primary: int
+    ) -> list[ConflictRecord]:
+        """Pair the primary fork against each fork that concluded a different anomaly_type.
+
+        anomaly_type is the deterministic, structured disagreement signal (comparing
+        free-text root causes would flag every fork as different). Semantic
+        claim-level reconciliation would need an LLM and is out of scope here.
+        Only forks that produced at least one claim can be referenced.
+        """
+        by_index = {r[0]: r for r in reps}
+        p = by_index.get(primary)
+        if p is None or p[1] is None:
+            return []
+        _, p_claim, p_type, p_summary = p
+        assert p_claim is not None  # guarded by p[1] is None check above
+
+        conflicts = []
+        for index, rep_claim, anomaly_type, summary in reps:
+            if index == primary or rep_claim is None:
+                continue
+            if anomaly_type != p_type:
+                conflicts.append(
+                    ConflictRecord(
+                        conflict_id=f"xf-{primary}-{index}",
+                        topic="cross-fork root-cause disagreement",
+                        claim_a_id=p_claim,
+                        claim_b_id=rep_claim,
+                        resolution="unresolved",
+                        notes=(
+                            f"Fork {primary} concluded '{p_type}' ({p_summary}); "
+                            f"fork {index} concluded '{anomaly_type}' ({summary})"
+                        ),
+                    )
+                )
+        return conflicts
 
     @staticmethod
     def _fallback_report(diagnosis: DiagnosisReport) -> IncidentReport:
@@ -313,15 +488,21 @@ class MonitorAgent:
             else None
         )
 
-    async def _spawn_diagnostic_agent(self, anomaly: DetectedAnomaly) -> DiagnosisReport:
+    async def _spawn_diagnostic_agent(
+        self, anomaly: DetectedAnomaly, hypothesis: str | None = None
+    ) -> DiagnosisReport:
         """Spawn a Diagnostic sub-agent with scoped context and tools.
 
         The sub-agent starts with a blank context. All relevant information
         must be injected explicitly via the prompt (not inherited from the
         coordinator's conversation history), as a typed DetectedAnomaly rather
-        than a prose string.
+        than a prose string. When a hypothesis is given (fork-style exploration,
+        issue #67), the agent is steered to investigate that angle first.
         """
-        logger.info("Spawning Diagnostic Agent")
+        logger.info(
+            "Spawning Diagnostic Agent%s",
+            f" (hypothesis: {hypothesis})" if hypothesis else "",
+        )
 
         schema_hint = DiagnosisReport.model_json_schema()
         handoff = MonitorToDiagnosticHandoff(
@@ -340,13 +521,18 @@ class MonitorAgent:
         if runbook_section:
             system_prompt = system_prompt + "\n\n" + runbook_section
 
+        hypothesis_line = (
+            f"\nPrioritize investigating this hypothesis before others: {hypothesis}\n"
+            if hypothesis
+            else ""
+        )
         messages: list[dict[str, Any]] = [
             {
                 "role": "user",
                 "content": f"""Investigate the following anomaly detected by the monitoring system:
 
 {anomaly_json}
-
+{hypothesis_line}
 Use the available tools to determine the root cause. Respond with a JSON object matching the DiagnosisReport schema:
 {handoff.schema_hint}""",
             }
