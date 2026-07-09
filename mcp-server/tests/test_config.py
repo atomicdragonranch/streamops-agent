@@ -17,6 +17,18 @@ class TestConfig:
         # Fork defaults preserve single-agent behavior; hypothesis mode defaults to map.
         assert cfg.agent_diagnostic_forks == 1
         assert cfg.agent_hypothesis_mode == "map"
+        # Cross-cycle volatility gauge defaults (issue #77).
+        assert cfg.agent_incident_ongoing_gap == 1
+        assert cfg.agent_incident_worsen_pct == 0.25
+        assert cfg.agent_incident_dedup is True
+
+    def test_invalid_worsen_pct_rejected(self, monkeypatch):
+        # Arrange: a non-numeric threshold must fail fast at startup
+        monkeypatch.setenv("STREAMOPS_AGENT_INCIDENT_WORSEN_PCT", "not-a-number")
+
+        # Act + Assert
+        with pytest.raises(ValidationError):
+            StreamOpsConfig()
 
     def test_hypothesis_mode_override(self, monkeypatch):
         monkeypatch.setenv("STREAMOPS_AGENT_HYPOTHESIS_MODE", "llm")

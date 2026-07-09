@@ -35,6 +35,7 @@ from streamops_mcp.agent.schemas import (
     Severity,
 )
 from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS
+from streamops_mcp.agent.volatility import VolatilityGauge
 from streamops_mcp.config import config
 from streamops_mcp.logging_setup import (
     new_correlation_id,
@@ -116,6 +117,14 @@ class MonitorAgent:
         self.model = model or config.agent_model
         self.multi_agent = multi_agent
         self.max_tool_rounds = config.agent_max_tool_rounds
+        # Cross-cycle memory (issue #77); persists for the life of this instance,
+        # which is the whole run loop.
+        self._cycle_count = 0
+        self._gauge = VolatilityGauge(
+            ongoing_gap=config.agent_incident_ongoing_gap,
+            worsen_pct=config.agent_incident_worsen_pct,
+            dedup=config.agent_incident_dedup,
+        )
 
     @staticmethod
     def _is_retryable(exc: Exception) -> bool:
@@ -174,16 +183,43 @@ class MonitorAgent:
         """
         cycle_id = new_correlation_id()
         token = set_correlation_id(cycle_id)
+        self._cycle_count += 1
+        cycle = self._cycle_count
         try:
             logger.info(
-                "Starting monitoring cycle (cycle_id=%s, multi_agent=%s)",
+                "Starting monitoring cycle (cycle_id=%s, cycle=%d, multi_agent=%s)",
                 cycle_id,
+                cycle,
                 self.multi_agent,
             )
 
             detection = await self._detect_anomalies()
             if detection is None:
+                resolved = self._gauge.note_all_clear(cycle)
+                if resolved:
+                    logger.info("Resolved since last cycle: %s", ", ".join(resolved))
                 logger.info("No anomalies detected, infrastructure healthy")
+                return None
+
+            # Cross-cycle memory (issue #77): classify this anomaly against history
+            # and suppress a persistent, already-reported incident so it is not
+            # re-escalated every cycle.
+            delta = self._gauge.observe(detection, cycle)
+            logger.info(
+                "Volatility: incident %s is %s (occurrence %d)",
+                delta.fingerprint,
+                delta.status.value,
+                delta.occurrences,
+            )
+            if delta.resolved:
+                logger.info("Resolved since last cycle: %s", ", ".join(delta.resolved))
+            if not delta.should_report:
+                logger.info(
+                    "Suppressing duplicate escalation for ongoing unchanged incident %s "
+                    "(active %d cycles)",
+                    delta.fingerprint,
+                    delta.occurrences,
+                )
                 return None
 
             if self.multi_agent:
@@ -238,6 +274,8 @@ class MonitorAgent:
                     )
 
             await escalate(report, diagnosis=diagnosis)
+            # Mark reported so an unchanged recurrence next cycle is suppressed (#77).
+            self._gauge.mark_reported(delta.fingerprint)
             return report
         finally:
             reset_correlation_id(token)
@@ -541,10 +579,15 @@ class MonitorAgent:
         agent carries typed context instead of prose.
         """
         detection_schema = DetectedAnomaly.model_json_schema()
+        # Change awareness (issue #77): tell detection what carried over from prior
+        # cycles so an ongoing anomaly is recognized as such, not a first sighting.
+        prior_context = self._gauge.prior_context(self._cycle_count)
+        continuity = f"{prior_context}\n\n" if prior_context else ""
         messages: list[dict[str, Any]] = [
             {
                 "role": "user",
                 "content": (
+                    f"{continuity}"
                     "Run a health check on the streaming infrastructure. Check Flink jobs, "
                     "consumer lag, and recent events. If everything is healthy, say so briefly. "
                     "If you detect an anomaly, respond with ONLY a JSON object matching this "

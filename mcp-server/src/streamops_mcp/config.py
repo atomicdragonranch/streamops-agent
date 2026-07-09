@@ -76,6 +76,18 @@ class StreamOpsConfig(BaseSettings):
     # Only takes effect when agent_diagnostic_forks > 1.
     agent_hypothesis_mode: Literal["static", "map", "llm"] = "map"
 
+    # Cross-cycle volatility gauge (issue #77): give the stateless coordinator
+    # memory across cycles so a persistent anomaly is diagnosed/reported once, not
+    # re-escalated every cycle (idempotency / anti-alert-spam).
+    # A re-detected anomaly counts as ONGOING (same incident) if last seen within
+    # this many cycles; a longer gap makes it a NEW incident again.
+    agent_incident_ongoing_gap: int = 1
+    # An ongoing anomaly whose observed_value rose by at least this fraction since
+    # last cycle counts as WORSENING (re-reports despite dedup).
+    agent_incident_worsen_pct: float = 0.25
+    # Suppress re-escalation of an unchanged, already-reported ongoing incident.
+    agent_incident_dedup: bool = True
+
     # Input sanitization
     agent_sanitize_max_output_chars: int = 20_000
 
