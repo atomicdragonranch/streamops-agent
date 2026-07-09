@@ -85,11 +85,18 @@ graph LR
         REP[Report Agent<br/>Synthesis Only]
     end
 
-    MON -->|"Anomaly context<br/>(full text + schema)"| DIAG
+    MON -->|"DetectedAnomaly<br/>(typed + schema)"| DIAG
     DIAG -->|"DiagnosisReport<br/>(claims + sources + conflicts)"| MON
     MON -->|"DiagnosisReport JSON<br/>(structured, attributed)"| REP
-    REP -->|"IncidentReport<br/>(severity + actions)"| MON
+    REP -->|"IncidentReport<br/>(severity + actions, attributed)"| MON
 ```
+
+The coordinator can also fan out **multiple diagnostic sub-agents in parallel**,
+each seeded with a distinct hypothesis, then merge them (cross-fork
+disagreements become escalated conflicts). This is off by default
+(`agent_diagnostic_forks = 1`); see the
+[fork-diagnostics runbook](docs/fork-diagnostics-runbook.md) for how to enable
+and verify it.
 
 ## Agentic Loop
 
