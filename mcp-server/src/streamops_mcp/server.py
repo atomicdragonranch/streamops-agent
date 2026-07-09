@@ -13,15 +13,13 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from streamops_mcp.logging_setup import configure_logging
 from streamops_mcp.tools.events import register_event_tools
 from streamops_mcp.tools.flink import register_flink_tools
 from streamops_mcp.tools.kafka import register_kafka_tools
 from streamops_mcp.tools.prometheus import register_prometheus_tools
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
-)
+configure_logging()
 logger = logging.getLogger("streamops-mcp")
 
 mcp = FastMCP(

@@ -669,3 +669,56 @@ class TestRunCycleOrchestration:
         # Assert: cycle aborts cleanly, nothing escalated
         assert result is None
         mock_escalate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cycle_binds_correlation_id_and_resets_after(self, agent):
+        # Arrange: capture the correlation id as seen deep in the cycle (at escalation)
+        from streamops_mcp.logging_setup import get_correlation_id
+
+        agent.client = _mock_client(
+            _api_response("Anomaly detected: consumer lag spike on partition 2"),
+            _api_response(_DIAGNOSIS_JSON),
+            _api_response(_REPORT_JSON),
+        )
+        seen: dict[str, str] = {}
+
+        async def _capture(*args, **kwargs):
+            seen["cid"] = get_correlation_id()
+
+        # Act
+        with patch(
+            "streamops_mcp.agent.monitor.escalate", new=_capture,
+        ):
+            await agent.run_cycle()
+
+        # Assert: a real cycle id was bound during the cycle, and it is cleared after
+        assert seen["cid"].startswith("cyc-")
+        assert get_correlation_id() == "-"
+
+    @pytest.mark.asyncio
+    async def test_two_cycles_get_distinct_correlation_ids(self, agent):
+        # Arrange
+        from streamops_mcp.logging_setup import get_correlation_id
+
+        seen: list[str] = []
+
+        async def _capture(*args, **kwargs):
+            seen.append(get_correlation_id())
+
+        def _fresh_client():
+            return _mock_client(
+                _api_response("Anomaly detected: consumer lag spike on partition 2"),
+                _api_response(_DIAGNOSIS_JSON),
+                _api_response(_REPORT_JSON),
+            )
+
+        # Act: run two independent cycles
+        with patch("streamops_mcp.agent.monitor.escalate", new=_capture):
+            agent.client = _fresh_client()
+            await agent.run_cycle()
+            agent.client = _fresh_client()
+            await agent.run_cycle()
+
+        # Assert: each cycle got its own id (no cross-cycle bleed)
+        assert len(seen) == 2
+        assert seen[0] != seen[1]

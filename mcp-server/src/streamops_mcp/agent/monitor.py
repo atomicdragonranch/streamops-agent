@@ -34,6 +34,11 @@ from streamops_mcp.agent.schemas import (
 )
 from streamops_mcp.agent.tools import ALL_TOOLS, DIAGNOSTIC_TOOLS
 from streamops_mcp.config import config
+from streamops_mcp.logging_setup import (
+    new_correlation_id,
+    reset_correlation_id,
+    set_correlation_id,
+)
 from streamops_mcp.prompts import load_prompt, load_runbook
 
 logger = logging.getLogger("streamops-mcp.monitor")
@@ -102,69 +107,81 @@ class MonitorAgent:
         """Run one monitoring cycle: poll, detect, diagnose, report.
 
         Returns an IncidentReport if an anomaly was found, None if healthy.
+
+        A correlation id is bound for the whole cycle so every log line the
+        cycle emits (this coordinator, both sub-agents, the tool executor, and
+        escalation) shares one greppable id. See issue #84.
         """
-        logger.info("Starting monitoring cycle (multi_agent=%s)", self.multi_agent)
-
-        detection = await self._detect_anomalies()
-        if detection is None:
-            logger.info("No anomalies detected, infrastructure healthy")
-            return None
-
-        if self.multi_agent:
-            try:
-                diagnosis = await self._retry_subagent(
-                    "Diagnostic Agent",
-                    lambda: self._spawn_diagnostic_agent(detection),
-                )
-            except Exception as exc:
-                logger.error(
-                    "Diagnostic Agent failed after retries, cycle aborted: %s", exc,
-                )
-                return None
-
-            self._log_confidence_distribution(diagnosis)
-
-            if self._all_claims_low_confidence(diagnosis):
-                logger.warning(
-                    "All %d claims are LOW or UNSOURCED confidence; "
-                    "downgrading to warning-level log, skipping report agent",
-                    len(diagnosis.claims),
-                )
-                return None
-
-            low_claims = self._extract_low_confidence_claims(diagnosis)
-
-            try:
-                report = await self._retry_subagent(
-                    "Report Agent",
-                    lambda: self._spawn_report_agent(diagnosis),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Report Agent failed after retries, producing fallback report: %s", exc,
-                )
-                report = self._fallback_report(diagnosis)
-
-            if low_claims and not report.low_confidence_claims:
-                report.low_confidence_claims = low_claims
-        else:
-            diagnosis = self._extract_diagnosis_from_detection(detection)
-            report = await self._spawn_report_agent(diagnosis)
-
-        if diagnosis.conflicts:
-            logger.warning(
-                "Coordinator received %d unresolved conflict(s) from Diagnostic Agent",
-                len(diagnosis.conflicts),
+        cycle_id = new_correlation_id()
+        token = set_correlation_id(cycle_id)
+        try:
+            logger.info(
+                "Starting monitoring cycle (cycle_id=%s, multi_agent=%s)",
+                cycle_id, self.multi_agent,
             )
-            for conflict in diagnosis.conflicts:
-                logger.warning(
-                    "Conflict %s [%s]: claims %s vs %s",
-                    conflict.conflict_id, conflict.topic,
-                    conflict.claim_a_id, conflict.claim_b_id,
-                )
 
-        await escalate(report, diagnosis=diagnosis)
-        return report
+            detection = await self._detect_anomalies()
+            if detection is None:
+                logger.info("No anomalies detected, infrastructure healthy")
+                return None
+
+            if self.multi_agent:
+                try:
+                    diagnosis = await self._retry_subagent(
+                        "Diagnostic Agent",
+                        lambda: self._spawn_diagnostic_agent(detection),
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Diagnostic Agent failed after retries, cycle aborted: %s", exc,
+                    )
+                    return None
+
+                self._log_confidence_distribution(diagnosis)
+
+                if self._all_claims_low_confidence(diagnosis):
+                    logger.warning(
+                        "All %d claims are LOW or UNSOURCED confidence; "
+                        "downgrading to warning-level log, skipping report agent",
+                        len(diagnosis.claims),
+                    )
+                    return None
+
+                low_claims = self._extract_low_confidence_claims(diagnosis)
+
+                try:
+                    report = await self._retry_subagent(
+                        "Report Agent",
+                        lambda: self._spawn_report_agent(diagnosis),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Report Agent failed after retries, producing fallback report: %s", exc,
+                    )
+                    report = self._fallback_report(diagnosis)
+
+                if low_claims and not report.low_confidence_claims:
+                    report.low_confidence_claims = low_claims
+            else:
+                diagnosis = self._extract_diagnosis_from_detection(detection)
+                report = await self._spawn_report_agent(diagnosis)
+
+            if diagnosis.conflicts:
+                logger.warning(
+                    "Coordinator received %d unresolved conflict(s) from Diagnostic Agent",
+                    len(diagnosis.conflicts),
+                )
+                for conflict in diagnosis.conflicts:
+                    logger.warning(
+                        "Conflict %s [%s]: claims %s vs %s",
+                        conflict.conflict_id, conflict.topic,
+                        conflict.claim_a_id, conflict.claim_b_id,
+                    )
+
+            await escalate(report, diagnosis=diagnosis)
+            return report
+        finally:
+            reset_correlation_id(token)
 
     @staticmethod
     def _fallback_report(diagnosis: DiagnosisReport) -> IncidentReport:
