@@ -29,6 +29,7 @@ from streamops_mcp.agent.schemas import (
     SourceRecord,
 )
 from streamops_mcp.agent.schemas.diagnosis import AffectedComponent
+from streamops_mcp.agent.volatility import VolatilityGauge
 
 
 def _fake_response(status_code: int) -> httpx.Response:
@@ -840,6 +841,9 @@ class TestRunCycleOrchestration:
         # Arrange
         from streamops_mcp.logging_setup import get_correlation_id
 
+        # This test is about correlation ids, not dedup: disable cross-cycle
+        # suppression so both identical cycles run all the way through (#77).
+        agent._gauge = VolatilityGauge(dedup=False)
         seen: list[str] = []
 
         async def _capture(*args, **kwargs):
@@ -1269,3 +1273,41 @@ class TestPreDelegationGate:
         assert result is None
         spawn_report.assert_not_awaited()
         mock_escalate.assert_not_awaited()
+
+
+class TestCrossCycleMemory:
+    """Cross-cycle dedup through run_cycle: a persistent incident reports once (#77)."""
+
+    _DETECTION = json.dumps(
+        {
+            "anomaly_type": "latency_spike",
+            "summary": "processing latency 2,000ms",
+            "detected_at": "2026-07-09T12:00:00Z",
+            "affected_component": "processor",
+        }
+    )
+
+    @pytest.mark.asyncio
+    async def test_persistent_incident_suppressed_on_second_cycle(self, agent, monkeypatch):
+        # Arrange: single-agent fan-out; the same anomaly is detected both cycles
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_diagnostic_forks", 1)
+
+        with patch("streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock) as mock_escalate:
+            # Act: cycle 1 detects, diagnoses, reports, escalates
+            agent.client = _mock_client(
+                _api_response(self._DETECTION),
+                _api_response(_DIAGNOSIS_JSON),
+                _api_response(_REPORT_JSON),
+            )
+            first = await agent.run_cycle()
+
+            # Act: cycle 2 detects the same incident; only detection is consumed
+            agent.client = _mock_client(_api_response(self._DETECTION))
+            second = await agent.run_cycle()
+
+        # Assert: reported once, suppressed the second cycle (no re-escalation)
+        assert isinstance(first, IncidentReport)
+        assert second is None
+        assert mock_escalate.await_count == 1
+        # cycle 2 stopped after detection: no diagnostic/report calls
+        assert agent.client.messages.create.call_count == 1
