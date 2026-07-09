@@ -17,11 +17,9 @@ import sys
 
 from streamops_mcp.agent.monitor import MonitorAgent
 from streamops_mcp.config import config
+from streamops_mcp.logging_setup import configure_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
-)
+configure_logging()
 logger = logging.getLogger("streamops-mcp.agent")
 
 
