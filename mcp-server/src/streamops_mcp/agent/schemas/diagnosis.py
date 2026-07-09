@@ -7,7 +7,7 @@ not free-form text.
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Confidence(StrEnum):
@@ -29,7 +29,9 @@ class SourceRecord(BaseModel):
     """
 
     source_id: str = Field(description="Unique identifier for this source (e.g., 'src-001')")
-    tool_name: str = Field(description="MCP tool that produced this data (e.g., 'query_flink_jobs')")
+    tool_name: str = Field(
+        description="MCP tool that produced this data (e.g., 'query_flink_jobs')"
+    )
     retrieved_at: str = Field(description="ISO-8601 timestamp when the data was retrieved")
     raw_output: str = Field(description="Verbatim or summarized tool output")
 
@@ -44,7 +46,9 @@ class ClaimRecord(BaseModel):
     """
 
     claim_id: str = Field(description="Unique identifier for this claim (e.g., 'C01')")
-    text: str = Field(description="The factual claim (e.g., 'Consumer lag is 45,000 on partition 2')")
+    text: str = Field(
+        description="The factual claim (e.g., 'Consumer lag is 45,000 on partition 2')"
+    )
     source_id: str = Field(description="References SourceRecord.source_id that produced this claim")
     confidence: Confidence = Field(
         description=(
@@ -86,7 +90,9 @@ class AffectedComponent(BaseModel):
     name: str = Field(description="Component identifier (e.g., 'kafka-consumer', 'flink-operator')")
     role: str = Field(description="What this component does in the pipeline")
     status: str = Field(description="Current state: healthy, degraded, failing, unknown")
-    evidence: str = Field(description="Specific metric or log entry supporting the status assessment")
+    evidence: str = Field(
+        description="Specific metric or log entry supporting the status assessment"
+    )
 
 
 class RootCause(BaseModel):
@@ -111,7 +117,9 @@ class DiagnosisReport(BaseModel):
 
     """
 
-    anomaly_type: str = Field(description="Category: latency_spike, throughput_drop, backpressure, checkpoint_failure, memory_pressure, error_burst")
+    anomaly_type: str = Field(
+        description="Category: latency_spike, throughput_drop, backpressure, checkpoint_failure, memory_pressure, error_burst"
+    )
     detected_at: str = Field(description="ISO-8601 timestamp when the anomaly was first detected")
     sources: list[SourceRecord] = Field(
         default_factory=list,
@@ -129,10 +137,52 @@ class DiagnosisReport(BaseModel):
         description="Components involved in or affected by the anomaly"
     )
     root_cause: RootCause = Field(description="Identified or suspected root cause")
-    tools_used: list[str] = Field(
-        description="MCP tools called during investigation (audit trail)"
-    )
+    tools_used: list[str] = Field(description="MCP tools called during investigation (audit trail)")
     raw_evidence: list[str] = Field(
         default_factory=list,
         description="Key data points collected during investigation",
     )
+
+    @model_validator(mode="after")
+    def _check_attribution_integrity(self):
+        """Enforce claim-source attribution integrity so nothing is untraceable.
+
+        Every sourced claim must reference a real source, and every conflict must
+        reference real claims. This prevents the "attribution lost" failure the
+        claim-source pattern exists to stop: a dangling source_id would leave a
+        finding with no traceable origin. UNSOURCED claims are exempt, since they
+        explicitly have no backing data source.
+        """
+        source_ids = [s.source_id for s in self.sources]
+        dup_sources = sorted({sid for sid in source_ids if source_ids.count(sid) > 1})
+        if dup_sources:
+            raise ValueError(
+                f"Duplicate source_id(s), references would be ambiguous: {dup_sources}"
+            )
+        source_id_set = set(source_ids)
+
+        claim_ids = [c.claim_id for c in self.claims]
+        dup_claims = sorted({cid for cid in claim_ids if claim_ids.count(cid) > 1})
+        if dup_claims:
+            raise ValueError(
+                f"Duplicate claim_id(s), conflict references would be ambiguous: {dup_claims}"
+            )
+        claim_id_set = set(claim_ids)
+
+        for claim in self.claims:
+            if claim.confidence == Confidence.UNSOURCED:
+                continue
+            if claim.source_id not in source_id_set:
+                raise ValueError(
+                    f"Claim '{claim.claim_id}' references unknown source_id "
+                    f"'{claim.source_id}'; attribution would be untraceable"
+                )
+
+        for conflict in self.conflicts:
+            for cid in (conflict.claim_a_id, conflict.claim_b_id):
+                if cid not in claim_id_set:
+                    raise ValueError(
+                        f"Conflict '{conflict.conflict_id}' references unknown claim_id '{cid}'"
+                    )
+
+        return self

@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from streamops_mcp.agent.schemas import (
     ClaimRecord,
@@ -20,7 +21,6 @@ from streamops_mcp.agent.schemas.incident import RecommendedAction
 
 
 class TestDiagnosisReport:
-
     def test_valid_diagnosis(self):
         # Arrange
         data = {
@@ -113,7 +113,6 @@ class TestDiagnosisReport:
 
 
 class TestIncidentReport:
-
     def test_valid_incident(self):
         # Arrange
         data = {
@@ -163,7 +162,6 @@ class TestIncidentReport:
 
 
 class TestRecommendedAction:
-
     def test_action_with_downtime(self):
         # Arrange
         action = RecommendedAction(
@@ -191,7 +189,6 @@ class TestRecommendedAction:
 
 
 class TestSourceRecord:
-
     def test_valid_source(self):
         # Arrange + Act
         source = SourceRecord(
@@ -207,7 +204,6 @@ class TestSourceRecord:
 
 
 class TestClaimRecord:
-
     def test_valid_claim(self):
         # Arrange + Act
         claim = ClaimRecord(
@@ -242,8 +238,116 @@ class TestClaimRecord:
         assert claim.confidence == Confidence.MEDIUM
 
 
-class TestConflictRecord:
+class TestAttributionIntegrity:
+    """DiagnosisReport enforces claim-source and conflict referential integrity (#81)."""
 
+    @staticmethod
+    def _report(sources, claims, conflicts):
+        return dict(
+            anomaly_type="latency_spike",
+            detected_at="2026-06-18T15:00:00Z",
+            affected_components=[],
+            root_cause=RootCause(summary="s", confidence="low", reasoning="r"),
+            tools_used=["query_metrics"],
+            sources=sources,
+            claims=claims,
+            conflicts=conflicts,
+        )
+
+    def test_valid_attribution_passes(self):
+        # Arrange
+        sources = [
+            SourceRecord(
+                source_id="src-001",
+                tool_name="query_metrics",
+                retrieved_at="2026-06-18T15:00:00Z",
+                raw_output="lag=45000",
+            )
+        ]
+        claims = [
+            ClaimRecord(
+                claim_id="C01",
+                text="Consumer lag is 45000",
+                source_id="src-001",
+                confidence=Confidence.HIGH,
+            ),
+            ClaimRecord(
+                claim_id="C02",
+                text="Backpressure rising",
+                source_id="src-001",
+                confidence=Confidence.MEDIUM,
+            ),
+        ]
+        conflicts = [
+            ConflictRecord(
+                conflict_id="conf-001", topic="lag trend", claim_a_id="C01", claim_b_id="C02"
+            )
+        ]
+
+        # Act
+        report = DiagnosisReport(**self._report(sources, claims, conflicts))
+
+        # Assert
+        assert len(report.claims) == 2
+
+    def test_claim_referencing_unknown_source_rejected(self):
+        # Arrange
+        sources = [
+            SourceRecord(
+                source_id="src-001", tool_name="query_metrics", retrieved_at="t", raw_output="o"
+            )
+        ]
+        claims = [
+            ClaimRecord(claim_id="C01", text="x", source_id="src-999", confidence=Confidence.HIGH)
+        ]
+
+        # Act / Assert
+        with pytest.raises(ValidationError, match="unknown source_id"):
+            DiagnosisReport(**self._report(sources, claims, []))
+
+    def test_unsourced_claim_needs_no_source(self):
+        # Arrange: an UNSOURCED claim legitimately has no backing source
+        claims = [
+            ClaimRecord(
+                claim_id="C01", text="speculative", source_id="", confidence=Confidence.UNSOURCED
+            )
+        ]
+
+        # Act
+        report = DiagnosisReport(**self._report([], claims, []))
+
+        # Assert
+        assert report.claims[0].confidence == Confidence.UNSOURCED
+
+    def test_conflict_referencing_unknown_claim_rejected(self):
+        # Arrange
+        sources = [
+            SourceRecord(source_id="src-001", tool_name="t", retrieved_at="t", raw_output="o")
+        ]
+        claims = [
+            ClaimRecord(claim_id="C01", text="x", source_id="src-001", confidence=Confidence.HIGH)
+        ]
+        conflicts = [
+            ConflictRecord(conflict_id="conf-001", topic="t", claim_a_id="C01", claim_b_id="C99")
+        ]
+
+        # Act / Assert
+        with pytest.raises(ValidationError, match="unknown claim_id"):
+            DiagnosisReport(**self._report(sources, claims, conflicts))
+
+    def test_duplicate_source_id_rejected(self):
+        # Arrange
+        sources = [
+            SourceRecord(source_id="src-001", tool_name="t", retrieved_at="t", raw_output="a"),
+            SourceRecord(source_id="src-001", tool_name="t", retrieved_at="t", raw_output="b"),
+        ]
+
+        # Act / Assert
+        with pytest.raises(ValidationError, match="Duplicate source_id"):
+            DiagnosisReport(**self._report(sources, [], []))
+
+
+class TestConflictRecord:
     def test_valid_conflict(self):
         # Arrange + Act
         conflict = ConflictRecord(
@@ -286,7 +390,6 @@ class TestConflictRecord:
 
 
 class TestDiagnosisWithAttribution:
-
     def test_full_diagnosis_with_claims_and_sources(self):
         # Arrange
         data = {
@@ -449,7 +552,6 @@ class TestDiagnosisWithAttribution:
 
 
 class TestConfidence:
-
     def test_confidence_enum_values(self):
         # Assert
         assert Confidence.HIGH.value == "HIGH"
@@ -565,7 +667,9 @@ class TestConfidence:
 
         # Act
         high_claims = [c for c in report.claims if c.confidence == Confidence.HIGH]
-        low_claims = [c for c in report.claims if c.confidence in (Confidence.LOW, Confidence.UNSOURCED)]
+        low_claims = [
+            c for c in report.claims if c.confidence in (Confidence.LOW, Confidence.UNSOURCED)
+        ]
 
         # Assert
         assert len(high_claims) == 1
@@ -573,7 +677,6 @@ class TestConfidence:
 
 
 class TestIncidentReportLowConfidence:
-
     def test_incident_with_low_confidence_claims(self):
         # Arrange
         data = {
@@ -630,7 +733,6 @@ class TestIncidentReportLowConfidence:
 
 
 class TestDraftOnlyContract:
-
     def test_requires_human_approval_defaults_true(self):
         # Arrange
         data = {
@@ -683,7 +785,6 @@ class TestDraftOnlyContract:
 
 
 class TestMonitorToDiagnosticHandoff:
-
     def test_valid_handoff(self):
         # Arrange + Act
         handoff = MonitorToDiagnosticHandoff(
@@ -699,6 +800,7 @@ class TestMonitorToDiagnosticHandoff:
         # Arrange
         monkeypatch.setenv("STREAMOPS_AGENT_HANDOFF_MAX_CONTEXT_CHARS", "100")
         from streamops_mcp.config import StreamOpsConfig
+
         test_config = StreamOpsConfig()
         monkeypatch.setattr("streamops_mcp.agent.schemas.handoff.config", test_config)
 
@@ -729,7 +831,6 @@ class TestMonitorToDiagnosticHandoff:
 
 
 class TestDiagnosticToReportHandoff:
-
     def test_valid_handoff(self):
         # Arrange
         diagnosis = DiagnosisReport(
@@ -761,6 +862,7 @@ class TestDiagnosticToReportHandoff:
         # Arrange
         monkeypatch.setenv("STREAMOPS_AGENT_HANDOFF_MAX_CONTEXT_CHARS", "50")
         from streamops_mcp.config import StreamOpsConfig
+
         test_config = StreamOpsConfig()
         monkeypatch.setattr("streamops_mcp.agent.schemas.handoff.config", test_config)
 
