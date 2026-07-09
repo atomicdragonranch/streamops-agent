@@ -9,6 +9,7 @@ from streamops_mcp.agent.schemas import (
     ClaimRecord,
     Confidence,
     ConflictRecord,
+    DetectedAnomaly,
     DiagnosisReport,
     DiagnosticToReportHandoff,
     IncidentReport,
@@ -784,19 +785,66 @@ class TestDraftOnlyContract:
         assert "requires_human_approval" in str(schema)
 
 
+def _make_anomaly(summary: str = "Latency spike: 2,340ms (threshold 200ms)") -> DetectedAnomaly:
+    return DetectedAnomaly(
+        anomaly_type="latency_spike",
+        summary=summary,
+        detected_at="2026-07-09T12:00:00Z",
+        metric="processing_latency_ms",
+        observed_value="2340",
+        baseline="180",
+        threshold="200",
+        breach_direction="above",
+        affected_component="streamops-processor",
+        source_signal_ids=["query_flink_metrics:latency"],
+    )
+
+
+class TestDetectedAnomaly:
+    def test_minimal_required_fields(self):
+        # Arrange + Act: only the three required fields
+        anomaly = DetectedAnomaly(
+            anomaly_type="backpressure",
+            summary="Backpressure ratio 0.87 on sink-kafka",
+            detected_at="2026-07-09T12:00:00Z",
+        )
+
+        # Assert: optional typed fields default cleanly, ids default to empty
+        assert anomaly.metric is None
+        assert anomaly.source_signal_ids == []
+
+    def test_missing_required_field_rejected(self):
+        # Arrange + Act + Assert: summary is required
+        with pytest.raises(ValidationError):
+            DetectedAnomaly(anomaly_type="latency_spike", detected_at="2026-07-09T12:00:00Z")
+
+    def test_typed_fields_round_trip(self):
+        # Arrange
+        anomaly = _make_anomaly()
+
+        # Act
+        restored = DetectedAnomaly.model_validate_json(anomaly.model_dump_json())
+
+        # Assert
+        assert restored.observed_value == "2340"
+        assert restored.breach_direction == "above"
+        assert restored.source_signal_ids == ["query_flink_metrics:latency"]
+
+
 class TestMonitorToDiagnosticHandoff:
     def test_valid_handoff(self):
         # Arrange + Act
         handoff = MonitorToDiagnosticHandoff(
-            anomaly_context="Latency spike detected on partition 2",
+            anomaly=_make_anomaly(),
             schema_hint=DiagnosisReport.model_json_schema(),
         )
 
-        # Assert
-        assert handoff.anomaly_context == "Latency spike detected on partition 2"
+        # Assert: typed context, not a string to re-parse
+        assert handoff.anomaly.anomaly_type == "latency_spike"
+        assert handoff.anomaly.observed_value == "2340"
         assert "anomaly_type" in str(handoff.schema_hint)
 
-    def test_truncates_oversized_context(self, monkeypatch):
+    def test_truncates_oversized_summary(self, monkeypatch):
         # Arrange
         monkeypatch.setenv("STREAMOPS_AGENT_HANDOFF_MAX_CONTEXT_CHARS", "100")
         from streamops_mcp.config import StreamOpsConfig
@@ -804,21 +852,19 @@ class TestMonitorToDiagnosticHandoff:
         test_config = StreamOpsConfig()
         monkeypatch.setattr("streamops_mcp.agent.schemas.handoff.config", test_config)
 
-        oversized = "x" * 200
-
-        # Act
+        # Act: an over-long narrative summary must be truncated, not overflow the prompt
         handoff = MonitorToDiagnosticHandoff(
-            anomaly_context=oversized,
+            anomaly=_make_anomaly(summary="x" * 200),
             schema_hint={},
         )
 
         # Assert
-        assert len(handoff.anomaly_context) == 100
+        assert len(handoff.anomaly.summary) == 100
 
     def test_round_trip_serialization(self):
         # Arrange
         handoff = MonitorToDiagnosticHandoff(
-            anomaly_context="Backpressure ratio exceeded threshold",
+            anomaly=_make_anomaly(summary="Backpressure ratio exceeded threshold"),
             schema_hint=DiagnosisReport.model_json_schema(),
         )
 
@@ -827,7 +873,8 @@ class TestMonitorToDiagnosticHandoff:
         restored = MonitorToDiagnosticHandoff.model_validate_json(json_str)
 
         # Assert
-        assert restored.anomaly_context == handoff.anomaly_context
+        assert restored.anomaly.summary == handoff.anomaly.summary
+        assert restored.anomaly.anomaly_type == handoff.anomaly.anomaly_type
 
 
 class TestDiagnosticToReportHandoff:

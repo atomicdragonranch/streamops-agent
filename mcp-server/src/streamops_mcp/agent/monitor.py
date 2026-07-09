@@ -25,6 +25,7 @@ from streamops_mcp.agent.escalation import escalate
 from streamops_mcp.agent.executor import execute_tool
 from streamops_mcp.agent.schemas import (
     Confidence,
+    DetectedAnomaly,
     DiagnosisReport,
     DiagnosticToReportHandoff,
     IncidentReport,
@@ -92,11 +93,15 @@ class MonitorAgent:
                 retryable = self._is_retryable(exc)
                 logger.error(
                     "%s failed (attempt %d/%d, retryable=%s): %s",
-                    name, attempt + 1, 1 + max_retries, retryable, exc,
+                    name,
+                    attempt + 1,
+                    1 + max_retries,
+                    retryable,
+                    exc,
                 )
                 if not retryable or attempt >= max_retries:
                     raise
-                delay = base_delay * (2 ** attempt)
+                delay = base_delay * (2**attempt)
                 logger.info("Retrying %s in %.1fs", name, delay)
                 await asyncio.sleep(delay)
 
@@ -117,7 +122,8 @@ class MonitorAgent:
         try:
             logger.info(
                 "Starting monitoring cycle (cycle_id=%s, multi_agent=%s)",
-                cycle_id, self.multi_agent,
+                cycle_id,
+                self.multi_agent,
             )
 
             detection = await self._detect_anomalies()
@@ -133,7 +139,8 @@ class MonitorAgent:
                     )
                 except Exception as exc:
                     logger.error(
-                        "Diagnostic Agent failed after retries, cycle aborted: %s", exc,
+                        "Diagnostic Agent failed after retries, cycle aborted: %s",
+                        exc,
                     )
                     return None
 
@@ -156,7 +163,8 @@ class MonitorAgent:
                     )
                 except Exception as exc:
                     logger.warning(
-                        "Report Agent failed after retries, producing fallback report: %s", exc,
+                        "Report Agent failed after retries, producing fallback report: %s",
+                        exc,
                     )
                     report = self._fallback_report(diagnosis)
 
@@ -174,8 +182,10 @@ class MonitorAgent:
                 for conflict in diagnosis.conflicts:
                     logger.warning(
                         "Conflict %s [%s]: claims %s vs %s",
-                        conflict.conflict_id, conflict.topic,
-                        conflict.claim_a_id, conflict.claim_b_id,
+                        conflict.conflict_id,
+                        conflict.topic,
+                        conflict.claim_a_id,
+                        conflict.claim_b_id,
                     )
 
             await escalate(report, diagnosis=diagnosis)
@@ -222,12 +232,26 @@ class MonitorAgent:
         low_levels = {Confidence.LOW, Confidence.UNSOURCED}
         return [c.text for c in diagnosis.claims if c.confidence in low_levels]
 
-    async def _detect_anomalies(self) -> str | None:
+    async def _detect_anomalies(self) -> DetectedAnomaly | None:
         """Run the agentic loop to poll infrastructure and detect anomalies.
 
-        Returns the assistant's final text if anomalies were found, None if healthy.
+        Returns a structured DetectedAnomaly if an anomaly was found, None if
+        healthy. The agent explores with tools, then, on concluding an anomaly
+        exists, emits a DetectedAnomaly JSON so the handoff to the Diagnostic
+        agent carries typed context instead of prose.
         """
-        messages: list[dict[str, Any]] = [{"role": "user", "content": "Run a health check on the streaming infrastructure. Check Flink jobs, consumer lag, and recent events. Report any anomalies you find."}]
+        detection_schema = DetectedAnomaly.model_json_schema()
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": (
+                    "Run a health check on the streaming infrastructure. Check Flink jobs, "
+                    "consumer lag, and recent events. If everything is healthy, say so briefly. "
+                    "If you detect an anomaly, respond with ONLY a JSON object matching this "
+                    f"DetectedAnomaly schema:\n{detection_schema}"
+                ),
+            }
+        ]
 
         for round_num in range(self.max_tool_rounds):
             logger.debug("Detection loop round %d", round_num + 1)
@@ -256,9 +280,9 @@ class MonitorAgent:
             if response.stop_reason == "end_turn":
                 logger.info("Detection complete after %d rounds", round_num + 1)
                 if self._mentions_anomaly(assistant_text):
-                    summary = assistant_text[:300].replace("\n", " ")
-                    logger.info("Anomaly detected: %s", summary)
-                    return assistant_text
+                    anomaly = self._parse_detection(assistant_text)
+                    logger.info("Anomaly detected: %s", anomaly.summary[:300])
+                    return anomaly
                 logger.info("No anomalies found in detection response")
                 return None
 
@@ -266,11 +290,13 @@ class MonitorAgent:
                 tool_results = []
                 for tool_call in tool_calls:
                     result = await execute_tool(tool_call.name, tool_call.input)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_call.id,
-                        "content": result,
-                    })
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_call.id,
+                            "content": result,
+                        }
+                    )
                 messages.append({"role": "user", "content": tool_results})
 
             else:
@@ -278,41 +304,50 @@ class MonitorAgent:
                 break
 
         logger.warning("Detection loop hit max rounds (%d)", self.max_tool_rounds)
-        return assistant_text if self._mentions_anomaly(assistant_text) else None
+        return (
+            self._parse_detection(assistant_text)
+            if self._mentions_anomaly(assistant_text)
+            else None
+        )
 
-    async def _spawn_diagnostic_agent(self, anomaly_context: str) -> DiagnosisReport:
+    async def _spawn_diagnostic_agent(self, anomaly: DetectedAnomaly) -> DiagnosisReport:
         """Spawn a Diagnostic sub-agent with scoped context and tools.
 
         The sub-agent starts with a blank context. All relevant information
         must be injected explicitly via the prompt (not inherited from the
-        coordinator's conversation history).
+        coordinator's conversation history), as a typed DetectedAnomaly rather
+        than a prose string.
         """
         logger.info("Spawning Diagnostic Agent")
 
         schema_hint = DiagnosisReport.model_json_schema()
         handoff = MonitorToDiagnosticHandoff(
-            anomaly_context=anomaly_context,
+            anomaly=anomaly,
             schema_hint=schema_hint,
         )
+        anomaly_json = handoff.anomaly.model_dump_json(indent=2)
         logger.info(
-            "Monitor->Diagnostic handoff validated (%d chars)",
-            len(handoff.anomaly_context),
+            "Monitor->Diagnostic handoff validated (type=%s, %d chars)",
+            handoff.anomaly.anomaly_type,
+            len(anomaly_json),
         )
 
         system_prompt = DIAGNOSTIC_SYSTEM_PROMPT
-        runbook_section = self._resolve_runbooks(handoff.anomaly_context)
+        runbook_section = self._resolve_runbooks(handoff.anomaly.summary)
         if runbook_section:
             system_prompt = system_prompt + "\n\n" + runbook_section
 
-        messages: list[dict[str, Any]] = [{
-            "role": "user",
-            "content": f"""Investigate the following anomaly detected by the monitoring system:
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": f"""Investigate the following anomaly detected by the monitoring system:
 
-{handoff.anomaly_context}
+{anomaly_json}
 
 Use the available tools to determine the root cause. Respond with a JSON object matching the DiagnosisReport schema:
 {handoff.schema_hint}""",
-        }]
+            }
+        ]
 
         for round_num in range(self.max_tool_rounds):
             if not messages or messages[-1]["role"] != "user":
@@ -347,11 +382,13 @@ Use the available tools to determine the root cause. Respond with a JSON object 
                 tool_results = []
                 for tool_call in tool_calls:
                     result = await execute_tool(tool_call.name, tool_call.input)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_call.id,
-                        "content": result,
-                    })
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_call.id,
+                            "content": result,
+                        }
+                    )
                 messages.append({"role": "user", "content": tool_results})
 
         logger.warning("Diagnostic Agent hit max rounds")
@@ -381,15 +418,17 @@ Use the available tools to determine the root cause. Respond with a JSON object 
             model=self.model,
             max_tokens=config.agent_max_tokens,
             system=REPORT_SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": f"""Produce an incident report from this diagnosis:
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""Produce an incident report from this diagnosis:
 
 {handoff.diagnosis_json}
 
 Respond with a JSON object matching the IncidentReport schema:
 {handoff.schema_hint}""",
-            }],
+                }
+            ],
         )
 
         text = "".join(b.text for b in response.content if b.type == "text")
@@ -423,27 +462,56 @@ Respond with a JSON object matching the IncidentReport schema:
     def _mentions_anomaly(self, text: str) -> bool:
         """Simple heuristic: does the text suggest an anomaly was found?"""
         anomaly_keywords = [
-            "anomaly", "spike", "degraded", "failing", "exceeded", "threshold",
-            "timeout", "error", "critical", "backpressure", "lag", "pressure",
+            "anomaly",
+            "spike",
+            "degraded",
+            "failing",
+            "exceeded",
+            "threshold",
+            "timeout",
+            "error",
+            "critical",
+            "backpressure",
+            "lag",
+            "pressure",
         ]
         text_lower = text.lower()
         return any(kw in text_lower for kw in anomaly_keywords)
 
-    def _extract_diagnosis_from_detection(self, detection_text: str) -> DiagnosisReport:
-        """In single-agent mode, build a diagnosis from the detection text."""
+    def _extract_diagnosis_from_detection(self, anomaly: DetectedAnomaly) -> DiagnosisReport:
+        """In single-agent mode, build a diagnosis from the detected anomaly."""
         return DiagnosisReport(
-            anomaly_type="unknown",
-            detected_at=datetime.now(UTC).isoformat(),
+            anomaly_type=anomaly.anomaly_type,
+            detected_at=anomaly.detected_at,
             affected_components=[],
             root_cause=RootCause(
-                summary="See detection notes below",
+                summary=anomaly.summary,
                 confidence="medium",
-                reasoning=detection_text[:1000],
-                supporting_metrics=[],
+                reasoning=anomaly.summary,
+                supporting_metrics=[
+                    m for m in (anomaly.metric, anomaly.observed_value) if m is not None
+                ],
             ),
             tools_used=[],
-            raw_evidence=[detection_text[:500]],
+            raw_evidence=[anomaly.summary],
         )
+
+    def _parse_detection(self, text: str) -> DetectedAnomaly:
+        """Extract a DetectedAnomaly from the monitor's response.
+
+        Falls back to wrapping the raw text in ``summary`` when the model
+        emitted prose instead of JSON, so detection always yields typed context.
+        """
+        try:
+            json_str = self._extract_json(text)
+            return DetectedAnomaly.model_validate_json(json_str)
+        except Exception as e:
+            logger.warning("Failed to parse DetectedAnomaly: %s, using prose fallback", e)
+            return DetectedAnomaly(
+                anomaly_type="unknown",
+                summary=text[:1000],
+                detected_at=datetime.now(UTC).isoformat(),
+            )
 
     def _parse_diagnosis(self, text: str) -> DiagnosisReport:
         """Extract a DiagnosisReport from the agent's text response."""
