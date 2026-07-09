@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings
 
 
@@ -60,11 +62,19 @@ class StreamOpsConfig(BaseSettings):
     agent_max_retries: int = 2
     agent_retry_base_delay: float = 1.0
 
-    # Fork-style parallel diagnostic exploration (issue #67). Number of diagnostic
-    # sub-agents to fan out concurrently, each seeded with a distinct hypothesis.
-    # Default 1 preserves single-agent behavior; >1 fans out (capped at the number
-    # of defined hypotheses). Fan-out adds cost/latency, so raise it deliberately.
+    # Fork-style parallel diagnostic exploration (issue #67). Upper bound on the
+    # number of diagnostic sub-agents fanned out concurrently, each seeded with a
+    # distinct hypothesis. Default 1 preserves single-agent behavior; >1 enables
+    # fan-out. The actual count adapts to how many hypotheses the anomaly warrants
+    # (issue #91), never exceeding this cap. Fan-out adds cost/latency.
     agent_diagnostic_forks: int = 1
+
+    # How diagnostic-fork hypotheses are chosen (issue #91):
+    #   "static" - a fixed set of generic investigative angles
+    #   "map"    - hypotheses tailored to the anomaly_type (default; no extra LLM call)
+    #   "llm"    - generated per-anomaly by a cheap pre-fan-out LLM call
+    # Only takes effect when agent_diagnostic_forks > 1.
+    agent_hypothesis_mode: Literal["static", "map", "llm"] = "map"
 
     # Input sanitization
     agent_sanitize_max_output_chars: int = 20_000

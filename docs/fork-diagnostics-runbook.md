@@ -67,17 +67,22 @@ correlated-logs feature, issue #84). The log format is:
 ```
 
 In fork mode you will see the fan-out, one spawn line per fork with its
-hypothesis, and the merge:
+hypothesis, and the merge. By default (`agent_hypothesis_mode = map`) the
+hypotheses are tailored to the anomaly type; a `latency_spike` fans out into its
+latency-specific candidate causes:
 
 ```
 [streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Fanning out 3 diagnostic forks
-[streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Spawning Diagnostic Agent (hypothesis: Resource saturation: CPU, memory/heap, or GC pressure on the affected component.)
-[streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Spawning Diagnostic Agent (hypothesis: Data-side cause: partition skew, hot keys, or a surge in input volume.)
-[streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Spawning Diagnostic Agent (hypothesis: External dependency: a downstream sink, source, or coordination service degrading.)
+[streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Spawning Diagnostic Agent (hypothesis: GC/heap pressure or long stop-the-world pauses on the TaskManager.)
+[streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Spawning Diagnostic Agent (hypothesis: Serialization/deserialization cost or an expensive operator on the hot path.)
+[streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Spawning Diagnostic Agent (hypothesis: Latency in an external call (enrichment, sink, or lookup) blocking the pipeline.)
 [streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Monitor->Diagnostic handoff validated (type=latency_spike, 412 chars)
 ...
 [streamops-mcp.monitor] [cid=cyc-a1b2c3d4e5f6] INFO Claim confidence distribution: 4 HIGH, 2 MEDIUM, 1 LOW, 0 UNSOURCED
 ```
+
+An ambiguous anomaly (`type=unknown`) instead fans out into the generic
+investigative angles. See "Choosing hypotheses" below.
 
 If the forks disagree on the root cause, the coordinator logs the cross-fork
 conflict (note the `xf-` conflict id and the `f{i}:` namespaced claim ids), and
@@ -148,6 +153,27 @@ conflict count:
    with `xf-<primary>-<index>` ids and the topic
    `cross-fork root-cause disagreement`, distinct from intra-fork conflicts.
 
+## Choosing hypotheses
+
+How the fork hypotheses are chosen is set by `agent_hypothesis_mode` (issue #91),
+and only matters when `agent_diagnostic_forks > 1`:
+
+- **`map`** (default): hypotheses tailored to the `anomaly_type` (latency_spike,
+  throughput_drop, backpressure, checkpoint_failure, memory_pressure,
+  error_burst), falling back to generic angles for an unknown type. No extra
+  LLM call.
+- **`static`**: the fixed generic investigative angles regardless of type.
+- **`llm`**: a cheap pre-fan-out call generates candidate hypotheses for the
+  specific anomaly; on any failure it falls back to `map`.
+
+The fork count is **adaptive**: it follows the number of hypotheses the anomaly
+warrants (bounded by `agent_diagnostic_forks`), so a clear-cut anomaly with a
+single plausible cause runs one agent even when the cap is higher.
+
+```
+export STREAMOPS_AGENT_HYPOTHESIS_MODE=llm   # or map (default), or static
+```
+
 ## Baseline to diff against
 
 Run the same scenario with `STREAMOPS_AGENT_DIAGNOSTIC_FORKS=1`. You should see:
@@ -162,8 +188,7 @@ attributed diagnosis vs a single line of reasoning) is the feature.
 
 ## Notes
 
-- The hypotheses are currently a fixed set of generic investigative angles.
-  Deriving them from the specific anomaly and adapting the fork count to
-  ambiguity is tracked in issue #91.
+- Hypotheses are derived from the anomaly and the fork count adapts to
+  ambiguity (issue #91); see "Choosing hypotheses" above.
 - Cross-cycle change awareness ("what changed since last cycle") is tracked
   separately in issue #77.
