@@ -193,11 +193,13 @@ class MonitorAgent:
 
                 self._log_confidence_distribution(diagnosis)
 
-                if self._all_claims_low_confidence(diagnosis):
+                # Fail-fast: verify the diagnosis is substantive before delegating to
+                # the Report agent, so it never synthesizes an incident from thin or
+                # degraded context (cert Ep 04 pattern). See issue #94.
+                gate_reason = self._verify_diagnosis_precondition(diagnosis)
+                if gate_reason is not None:
                     logger.warning(
-                        "All %d claims are LOW or UNSOURCED confidence; "
-                        "downgrading to warning-level log, skipping report agent",
-                        len(diagnosis.claims),
+                        "Skipping Report Agent, diagnosis not reportable: %s", gate_reason
                     )
                     return None
 
@@ -503,6 +505,26 @@ class MonitorAgent:
             return False
         low_levels = {Confidence.LOW, Confidence.UNSOURCED}
         return all(c.confidence in low_levels for c in diagnosis.claims)
+
+    def _verify_diagnosis_precondition(self, diagnosis: DiagnosisReport) -> str | None:
+        """Check the diagnosis is substantive enough to delegate to the Report agent.
+
+        Returns a short reason string when the diagnosis is NOT fit to delegate,
+        or None when it is. Delegating a thin or degraded finding invites the
+        downstream Report agent to synthesize an incident from nothing (cert Ep 04
+        fail-fast delegation). Gated cases:
+          - a parse-error fallback diagnosis (unstructured, produced when the
+            Diagnostic agent's output could not be parsed),
+          - a diagnosis with no claims (no structured finding to report on),
+          - all claims LOW or UNSOURCED (no confident finding).
+        """
+        if diagnosis.anomaly_type == "parse_error":
+            return "diagnosis is a parse-error fallback (unstructured)"
+        if not diagnosis.claims:
+            return "diagnosis has no claims to report on"
+        if self._all_claims_low_confidence(diagnosis):
+            return f"all {len(diagnosis.claims)} claims are LOW or UNSOURCED confidence"
+        return None
 
     @staticmethod
     def _extract_low_confidence_claims(diagnosis: DiagnosisReport) -> list[str]:

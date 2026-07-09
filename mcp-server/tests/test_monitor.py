@@ -1195,3 +1195,77 @@ class TestDynamicHypotheses:
 
         # Assert: 3 forks (the hypotheses warranted), not 5 (the cap)
         assert len(seen) == 3
+
+
+def _empty_diagnosis() -> DiagnosisReport:
+    """A structurally valid diagnosis the Diagnostic agent produced with no claims."""
+    return DiagnosisReport(
+        anomaly_type="latency_spike",
+        detected_at="2026-07-09T12:00:00Z",
+        sources=[],
+        claims=[],
+        affected_components=[],
+        root_cause=RootCause(summary="inconclusive", confidence="low", reasoning="none"),
+        tools_used=[],
+    )
+
+
+class TestPreDelegationGate:
+    """The coordinator must not delegate a thin/degraded finding to the Report agent (Ep 04, issue #94)."""
+
+    def test_reportable_diagnosis_passes(self, agent):
+        # Arrange: a diagnosis with a HIGH-confidence claim
+        # Act
+        reason = agent._verify_diagnosis_precondition(_diag(confidence="HIGH"))
+
+        # Assert
+        assert reason is None
+
+    def test_no_claims_is_gated(self, agent):
+        # Arrange + Act
+        reason = agent._verify_diagnosis_precondition(_empty_diagnosis())
+
+        # Assert
+        assert reason is not None
+        assert "no claims" in reason
+
+    def test_parse_error_fallback_is_gated(self, agent):
+        # Arrange: the parse-error fallback shape (even if it somehow had a claim)
+        diagnosis = _diag(confidence="HIGH")
+        diagnosis.anomaly_type = "parse_error"
+
+        # Act
+        reason = agent._verify_diagnosis_precondition(diagnosis)
+
+        # Assert
+        assert reason is not None
+        assert "parse-error" in reason
+
+    def test_all_low_confidence_is_gated(self, agent):
+        # Arrange
+        # Act
+        reason = agent._verify_diagnosis_precondition(_diag(confidence="LOW"))
+
+        # Assert
+        assert reason is not None
+        assert "LOW or UNSOURCED" in reason
+
+    @pytest.mark.asyncio
+    async def test_run_cycle_does_not_delegate_empty_diagnosis(self, agent, monkeypatch):
+        # Arrange: detection fires, but the Diagnostic agent returns no claims
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_diagnostic_forks", 1)
+        monkeypatch.setattr(
+            agent, "_detect_anomalies", AsyncMock(return_value=_anom("latency_spike"))
+        )
+        monkeypatch.setattr(agent, "_run_diagnostics", AsyncMock(return_value=_empty_diagnosis()))
+        spawn_report = AsyncMock()
+        monkeypatch.setattr(agent, "_spawn_report_agent", spawn_report)
+
+        # Act
+        with patch("streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock) as mock_escalate:
+            result = await agent.run_cycle()
+
+        # Assert: fail-fast, the Report agent is never spawned and nothing escalates
+        assert result is None
+        spawn_report.assert_not_awaited()
+        mock_escalate.assert_not_awaited()
