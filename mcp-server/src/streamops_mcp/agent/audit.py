@@ -32,6 +32,8 @@ class AuditLogger:
         report: IncidentReport,
         diagnosis: DiagnosisReport | None = None,
         human_approved: bool | None = None,
+        unresolved_conflict_count: int = 0,
+        conflicts_acknowledged: bool | None = None,
     ) -> dict:
         entry: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -46,6 +48,11 @@ class AuditLogger:
             "low_confidence_claims": report.low_confidence_claims,
             "requires_human_approval": report.requires_human_approval,
             "human_approved": human_approved,
+            # Non-zero means the diagnosis had contradictions the coordinator was
+            # forced to surface; conflicts_acknowledged records the human decision
+            # (None = no input / already gated by CRITICAL severity).
+            "unresolved_conflict_count": unresolved_conflict_count,
+            "conflicts_acknowledged": conflicts_acknowledged,
         }
 
         if diagnosis is not None:
