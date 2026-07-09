@@ -13,7 +13,11 @@ import anthropic
 import httpx
 import pytest
 
-from streamops_mcp.agent.monitor import MonitorAgent
+from streamops_mcp.agent.monitor import (
+    ANOMALY_HYPOTHESES,
+    DIAGNOSTIC_HYPOTHESES,
+    MonitorAgent,
+)
 from streamops_mcp.agent.schemas import (
     ClaimRecord,
     Confidence,
@@ -1064,3 +1068,130 @@ class TestForkDiagnostics:
         assert isinstance(result, IncidentReport)
         assert agent.client.messages.create.call_count == 5
         mock_escalate.assert_awaited_once()
+
+
+class TestDynamicHypotheses:
+    """Hypotheses are derived from the anomaly, and the fork count adapts (issue #91)."""
+
+    def _set(self, monkeypatch, *, forks, mode="map"):
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_diagnostic_forks", forks)
+        monkeypatch.setattr("streamops_mcp.agent.monitor.config.agent_hypothesis_mode", mode)
+
+    @pytest.mark.asyncio
+    async def test_cap_one_returns_no_hypotheses(self, agent, monkeypatch):
+        # Arrange: default cap keeps single-agent behavior
+        self._set(monkeypatch, forks=1)
+
+        # Act
+        result = await agent._plan_hypotheses(_anom("latency_spike"))
+
+        # Assert
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_map_mode_uses_type_specific_hypotheses(self, agent, monkeypatch):
+        # Arrange
+        self._set(monkeypatch, forks=3, mode="map")
+
+        # Act
+        result = await agent._plan_hypotheses(_anom("checkpoint_failure"))
+
+        # Assert: tailored to the anomaly type, not the generic angles
+        assert result == ANOMALY_HYPOTHESES["checkpoint_failure"][:3]
+        assert any("state size" in h.lower() for h in result)
+
+    @pytest.mark.asyncio
+    async def test_map_mode_unknown_falls_back_to_generic(self, agent, monkeypatch):
+        # Arrange: an ambiguous anomaly has no tailored map entry
+        self._set(monkeypatch, forks=3, mode="map")
+
+        # Act
+        result = await agent._plan_hypotheses(_anom("unknown"))
+
+        # Assert
+        assert result == DIAGNOSTIC_HYPOTHESES[:3]
+
+    @pytest.mark.asyncio
+    async def test_static_mode_uses_generic(self, agent, monkeypatch):
+        # Arrange: static mode ignores the type map
+        self._set(monkeypatch, forks=2, mode="static")
+
+        # Act
+        result = await agent._plan_hypotheses(_anom("latency_spike"))
+
+        # Assert
+        assert result == DIAGNOSTIC_HYPOTHESES[:2]
+
+    @pytest.mark.asyncio
+    async def test_cap_bounds_hypothesis_count(self, agent, monkeypatch):
+        # Arrange: cap below the number of mapped hypotheses
+        self._set(monkeypatch, forks=2, mode="map")
+
+        # Act
+        result = await agent._plan_hypotheses(_anom("latency_spike"))
+
+        # Assert
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_llm_mode_uses_generated_hypotheses(self, agent, monkeypatch):
+        # Arrange: the model returns a candidate list (extra line trimmed to the cap)
+        self._set(monkeypatch, forks=3, mode="llm")
+        agent.client = _mock_client(
+            _api_response("- Hypothesis A\n- Hypothesis B\n- Hypothesis C\n- Hypothesis D")
+        )
+
+        # Act
+        result = await agent._plan_hypotheses(_anom("latency_spike"))
+
+        # Assert: parsed, de-bulleted, bounded to the cap
+        assert result == ["Hypothesis A", "Hypothesis B", "Hypothesis C"]
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_falls_back_to_map(self, agent, monkeypatch):
+        # Arrange: generation errors out
+        self._set(monkeypatch, forks=3, mode="llm")
+        agent.client = _mock_client(anthropic.APITimeoutError(request=None))
+
+        # Act
+        result = await agent._plan_hypotheses(_anom("backpressure"))
+
+        # Assert: falls back to the type map, never hinges on the optional pre-step
+        assert result == ANOMALY_HYPOTHESES["backpressure"][:3]
+
+    @pytest.mark.asyncio
+    async def test_forks_use_type_specific_hypotheses(self, agent, monkeypatch):
+        # Arrange
+        self._set(monkeypatch, forks=3, mode="map")
+        seen = []
+
+        async def fake_spawn(anomaly, hypothesis=None):
+            seen.append(hypothesis)
+            return _diag()
+
+        monkeypatch.setattr(agent, "_spawn_diagnostic_agent", fake_spawn)
+
+        # Act
+        result = await agent._run_diagnostics(_anom("throughput_drop"))
+
+        # Assert: each fork seeded with a throughput-drop-specific hypothesis
+        assert result is not None
+        assert set(seen) == set(ANOMALY_HYPOTHESES["throughput_drop"][:3])
+
+    @pytest.mark.asyncio
+    async def test_fork_count_adapts_to_hypotheses_not_cap(self, agent, monkeypatch):
+        # Arrange: cap (5) exceeds the mapped hypotheses (3) for this type
+        self._set(monkeypatch, forks=5, mode="map")
+        seen = []
+
+        async def fake_spawn(anomaly, hypothesis=None):
+            seen.append(hypothesis)
+            return _diag()
+
+        monkeypatch.setattr(agent, "_spawn_diagnostic_agent", fake_spawn)
+
+        # Act
+        await agent._run_diagnostics(_anom("latency_spike"))
+
+        # Assert: 3 forks (the hypotheses warranted), not 5 (the cap)
+        assert len(seen) == 3

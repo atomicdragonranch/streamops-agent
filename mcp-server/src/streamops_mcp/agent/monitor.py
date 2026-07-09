@@ -49,15 +49,51 @@ MONITOR_SYSTEM_PROMPT = load_prompt("monitor")
 DIAGNOSTIC_SYSTEM_PROMPT = load_prompt("diagnostic")
 REPORT_SYSTEM_PROMPT = load_prompt("report")
 
-# Distinct investigative angles seeded into parallel diagnostic forks (issue #67)
-# so each explores a different candidate cause instead of one line of reasoning
-# tunnel-visioning on an ambiguous anomaly. A fan-out of N takes the first N.
+# Generic investigative angles, used for ambiguous (unknown-type) anomalies and
+# for "static" hypothesis mode. Each fork explores a different candidate cause
+# instead of one line of reasoning tunnel-visioning (issue #67).
 DIAGNOSTIC_HYPOTHESES = [
     "Resource saturation: CPU, memory/heap, or GC pressure on the affected component.",
     "Data-side cause: partition skew, hot keys, or a surge in input volume.",
     "External dependency: a downstream sink, source, or coordination service degrading.",
     "Configuration or deployment change: a recent config, scaling, or version change.",
 ]
+
+# Hypotheses tailored per anomaly_type (issue #91): forks investigate the causes
+# actually plausible for this symptom rather than generic angles. The number of
+# entries drives the adaptive fork count for a typed anomaly (bounded by the cap).
+ANOMALY_HYPOTHESES = {
+    "latency_spike": [
+        "GC/heap pressure or long stop-the-world pauses on the TaskManager.",
+        "Serialization/deserialization cost or an expensive operator on the hot path.",
+        "Latency in an external call (enrichment, sink, or lookup) blocking the pipeline.",
+    ],
+    "throughput_drop": [
+        "A slow or stuck consumer/operator reducing end-to-end throughput.",
+        "A partition rebalance or reassignment interrupting consumption.",
+        "An upstream volume surge or source slowdown changing input rate.",
+    ],
+    "backpressure": [
+        "Downstream sink saturation (slow writes) propagating backpressure upstream.",
+        "Operator skew or a hot key overloading one subtask.",
+        "Insufficient parallelism for the current load.",
+    ],
+    "checkpoint_failure": [
+        "State size growth making checkpoints exceed their timeout.",
+        "Checkpoint timeout/interval configuration too tight for the workload.",
+        "State-backend or durable-storage I/O errors or slowness.",
+    ],
+    "memory_pressure": [
+        "Heap exhaustion or GC thrash from object churn.",
+        "Unbounded state growth (missing TTL or retention).",
+        "Data skew concentrating memory on one subtask.",
+    ],
+    "error_burst": [
+        "Bad or poison input (malformed events, schema drift) triggering exceptions.",
+        "A downstream dependency failing and surfacing as errors.",
+        "A recent deploy or config change regressing behavior.",
+    ],
+}
 
 # Confidence ordering for picking a fork's representative claim and the primary fork.
 _CONFIDENCE_RANK = {
@@ -205,27 +241,30 @@ class MonitorAgent:
             reset_correlation_id(token)
 
     async def _run_diagnostics(self, anomaly: DetectedAnomaly) -> DiagnosisReport | None:
-        """Diagnose the anomaly, single-agent or fork-style (issue #67).
+        """Diagnose the anomaly, single-agent or fork-style (issues #67, #91).
 
-        With ``agent_diagnostic_forks <= 1`` this is the original single
-        Diagnostic agent. With more, it fans out N agents concurrently, each
-        seeded with a distinct hypothesis, then merges the survivors. Returns
-        None only if the diagnosis could not be produced at all (single agent
-        failed, or every fork failed after retries).
+        The hypotheses are planned from the anomaly (see ``_plan_hypotheses``),
+        which also sets the fork count adaptively: a clear-cut anomaly runs one
+        agent, an ambiguous one fans out, never above ``agent_diagnostic_forks``.
+        With 0 or 1 planned hypotheses this is the original single Diagnostic
+        agent (seeded with the one hypothesis if there is one). Returns None only
+        if the diagnosis could not be produced at all (the single agent failed,
+        or every fork failed after retries).
         """
-        fork_count = min(config.agent_diagnostic_forks, len(DIAGNOSTIC_HYPOTHESES))
+        hypotheses = await self._plan_hypotheses(anomaly)
 
-        if fork_count <= 1:
+        if len(hypotheses) <= 1:
+            seed = hypotheses[0] if hypotheses else None
             try:
                 return await self._retry_subagent(
                     "Diagnostic Agent",
-                    lambda: self._spawn_diagnostic_agent(anomaly),
+                    lambda: self._spawn_diagnostic_agent(anomaly, hypothesis=seed),
                 )
             except Exception as exc:
                 logger.error("Diagnostic Agent failed after retries, cycle aborted: %s", exc)
                 return None
 
-        hypotheses = DIAGNOSTIC_HYPOTHESES[:fork_count]
+        fork_count = len(hypotheses)
         logger.info("Fanning out %d diagnostic forks", fork_count)
 
         async def _fork(index: int, hypothesis: str) -> DiagnosisReport:
@@ -253,6 +292,67 @@ class MonitorAgent:
                 len(survivors),
             )
         return self._merge_fork_diagnoses(survivors)
+
+    async def _plan_hypotheses(self, anomaly: DetectedAnomaly) -> list[str]:
+        """Choose the diagnostic hypotheses (and thus the fork count) for an anomaly.
+
+        Bounded by ``agent_diagnostic_forks``: <= 1 means single-agent (empty
+        list). Otherwise the pool depends on ``agent_hypothesis_mode``:
+          - "static": generic investigative angles.
+          - "map": angles tailored to the anomaly_type, generic for unknown types
+            (issue #91). The size of the type's entry adapts the fork count, so a
+            clear-cut type with one plausible cause runs one agent.
+          - "llm": angles generated per-anomaly, falling back to the map on failure.
+        """
+        cap = config.agent_diagnostic_forks
+        if cap <= 1:
+            return []
+
+        mode = config.agent_hypothesis_mode
+        if mode == "llm":
+            generated = await self._generate_hypotheses_llm(anomaly, cap)
+            pool = generated or self._mapped_hypotheses(anomaly)
+        elif mode == "static":
+            pool = DIAGNOSTIC_HYPOTHESES
+        else:  # "map"
+            pool = self._mapped_hypotheses(anomaly)
+
+        return pool[:cap]
+
+    @staticmethod
+    def _mapped_hypotheses(anomaly: DetectedAnomaly) -> list[str]:
+        """Per-type hypotheses, or the generic angles for an unknown/unmapped type."""
+        return ANOMALY_HYPOTHESES.get(anomaly.anomaly_type) or DIAGNOSTIC_HYPOTHESES
+
+    async def _generate_hypotheses_llm(self, anomaly: DetectedAnomaly, k: int) -> list[str] | None:
+        """Ask the model for up to k candidate root-cause hypotheses for this anomaly.
+
+        Returns None on any failure so the caller falls back to the static map;
+        a diagnosis must never hinge on this optional pre-step succeeding.
+        """
+        prompt = (
+            f"Given this streaming-pipeline anomaly, list up to {k} distinct candidate "
+            "root-cause hypotheses worth investigating in parallel, most likely first, "
+            "one per line, no numbering or commentary.\n\n"
+            f"{anomaly.model_dump_json(indent=2)}"
+        )
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=config.agent_max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as exc:
+            logger.warning("Hypothesis generation failed (%s); falling back to the map", exc)
+            return None
+
+        text = "".join(b.text for b in response.content if b.type == "text")
+        lines = [line.strip(" -*\t").strip() for line in text.splitlines()]
+        hypotheses = [line for line in lines if line][:k]
+        if not hypotheses:
+            logger.warning("Hypothesis generation returned nothing usable; falling back to the map")
+            return None
+        return hypotheses
 
     @classmethod
     def _merge_fork_diagnoses(cls, diagnoses: list[DiagnosisReport]) -> DiagnosisReport:
