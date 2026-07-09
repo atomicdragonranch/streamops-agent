@@ -733,6 +733,82 @@ class TestIncidentReportLowConfidence:
         assert report.low_confidence_claims == []
 
 
+class TestIncidentReportAttribution:
+    """The incident must stay traceable: supporting claims trace to real sources."""
+
+    _BASE = {
+        "incident_id": "inc-001",
+        "title": "Latency spike",
+        "severity": "HIGH",
+        "summary": "Latency exceeded SLA.",
+        "anomaly_type": "latency_spike",
+        "root_cause": "GC pressure",
+        "affected_components": ["flink-operator"],
+        "timeline": ["15:00 - breach"],
+        "recommended_actions": [],
+        "monitoring_notes": "Watch heap",
+    }
+
+    def _source(self, sid="src-001"):
+        return {
+            "source_id": sid,
+            "tool_name": "query_flink_jobs",
+            "retrieved_at": "2026-07-09T12:00:00Z",
+            "raw_output": "{}",
+        }
+
+    def _claim(self, cid="C01", sid="src-001", confidence="HIGH"):
+        return {"claim_id": cid, "text": "Heap at 92%", "source_id": sid, "confidence": confidence}
+
+    def test_valid_attribution_passes(self):
+        # Arrange + Act
+        report = IncidentReport.model_validate(
+            {**self._BASE, "sources": [self._source()], "supporting_claims": [self._claim()]}
+        )
+
+        # Assert
+        assert report.supporting_claims[0].source_id == "src-001"
+
+    def test_defaults_to_empty_attribution(self):
+        # Arrange + Act: a report with no attribution is still valid (fallback path)
+        report = IncidentReport.model_validate(self._BASE)
+
+        # Assert
+        assert report.sources == []
+        assert report.supporting_claims == []
+
+    def test_supporting_claim_referencing_unknown_source_rejected(self):
+        # Arrange + Act + Assert
+        with pytest.raises(ValidationError, match="unknown source_id"):
+            IncidentReport.model_validate(
+                {
+                    **self._BASE,
+                    "sources": [self._source("src-001")],
+                    "supporting_claims": [self._claim("C01", "src-999")],
+                }
+            )
+
+    def test_unsourced_supporting_claim_needs_no_source(self):
+        # Arrange + Act: UNSOURCED claims are exempt from the source requirement
+        report = IncidentReport.model_validate(
+            {
+                **self._BASE,
+                "sources": [],
+                "supporting_claims": [self._claim("C01", "none", "UNSOURCED")],
+            }
+        )
+
+        # Assert
+        assert report.supporting_claims[0].confidence.value == "UNSOURCED"
+
+    def test_duplicate_source_id_rejected(self):
+        # Arrange + Act + Assert
+        with pytest.raises(ValidationError, match="Duplicate source_id"):
+            IncidentReport.model_validate(
+                {**self._BASE, "sources": [self._source("src-001"), self._source("src-001")]}
+            )
+
+
 class TestDraftOnlyContract:
     def test_requires_human_approval_defaults_true(self):
         # Arrange

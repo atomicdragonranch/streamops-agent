@@ -854,3 +854,33 @@ class TestRunCycleOrchestration:
         # Assert: each cycle got its own id (no cross-cycle bleed)
         assert len(seen) == 2
         assert seen[0] != seen[1]
+
+
+class TestIncidentAttribution:
+    """The synthesized incident must stay traceable to the diagnosis (issue #88)."""
+
+    def test_parse_incident_carries_diagnosis_attribution(self, agent):
+        # Arrange
+        diagnosis = DiagnosisReport.model_validate_json(_DIAGNOSIS_JSON)
+
+        # Act: synthesize the report from the diagnosis
+        report = agent._parse_incident(_REPORT_JSON, diagnosis)
+
+        # Assert: sources and claims survive synthesis, not just prose
+        assert [s.source_id for s in report.sources] == [s.source_id for s in diagnosis.sources]
+        assert [c.claim_id for c in report.supporting_claims] == [
+            c.claim_id for c in diagnosis.claims
+        ]
+        # And the carried claim still traces to a real carried source
+        assert report.supporting_claims[0].source_id in {s.source_id for s in report.sources}
+
+    def test_fallback_report_carries_attribution(self, agent):
+        # Arrange
+        diagnosis = DiagnosisReport.model_validate_json(_DIAGNOSIS_JSON)
+
+        # Act: even when the report agent is unavailable
+        report = agent._fallback_report(diagnosis)
+
+        # Assert
+        assert len(report.sources) == len(diagnosis.sources)
+        assert len(report.supporting_claims) == len(diagnosis.claims)

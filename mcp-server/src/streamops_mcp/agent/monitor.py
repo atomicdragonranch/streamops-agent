@@ -207,6 +207,9 @@ class MonitorAgent:
             timeline=[f"Detected at {diagnosis.detected_at}"],
             recommended_actions=[],
             monitoring_notes="Report agent was unavailable; review diagnosis data directly",
+            # Even on the fallback path the incident stays traceable (issue #88).
+            sources=diagnosis.sources,
+            supporting_claims=diagnosis.claims,
         )
 
     @staticmethod
@@ -535,13 +538,17 @@ Respond with a JSON object matching the IncidentReport schema:
             )
 
     def _parse_incident(self, text: str, diagnosis: DiagnosisReport) -> IncidentReport:
-        """Extract an IncidentReport from the report agent's response."""
+        """Extract an IncidentReport from the report agent's response.
+
+        The report is always re-attributed from the diagnosis so the incident
+        stays traceable to its evidence (see issue #88).
+        """
         try:
             json_str = self._extract_json(text)
-            return IncidentReport.model_validate_json(json_str)
+            report = IncidentReport.model_validate_json(json_str)
         except Exception as e:
             logger.warning("Failed to parse IncidentReport: %s, using fallback", e)
-            return IncidentReport(
+            report = IncidentReport(
                 incident_id=str(uuid.uuid4())[:8],
                 title=f"Anomaly: {diagnosis.anomaly_type}",
                 severity=Severity.MEDIUM,
@@ -553,6 +560,21 @@ Respond with a JSON object matching the IncidentReport schema:
                 recommended_actions=[],
                 monitoring_notes="Monitor after remediation",
             )
+        return self._attach_attribution(report, diagnosis)
+
+    @staticmethod
+    def _attach_attribution(report: IncidentReport, diagnosis: DiagnosisReport) -> IncidentReport:
+        """Carry the diagnosis's sources and claims into the report.
+
+        Deterministic (not LLM-supplied), so no hallucinated source_ids; the
+        merged report is re-validated so the attribution invariant holds on what
+        the pipeline actually emits. The diagnosis is already validated, so this
+        never fails in the normal path. See issue #88.
+        """
+        merged = report.model_dump()
+        merged["sources"] = [s.model_dump() for s in diagnosis.sources]
+        merged["supporting_claims"] = [c.model_dump() for c in diagnosis.claims]
+        return IncidentReport.model_validate(merged)
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from text that may contain markdown code blocks."""
