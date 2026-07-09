@@ -36,7 +36,6 @@ def agent():
 
 
 class TestAnomalyDetection:
-
     def test_detects_anomaly_keywords(self, agent):
         # Arrange
         text = "Consumer lag spike detected on partition 3, lag is 450,000 records"
@@ -68,8 +67,84 @@ class TestAnomalyDetection:
         assert result is True
 
 
-class TestJsonExtraction:
+class TestDetectionParsing:
+    """_detect_anomalies must hand the Diagnostic agent a typed DetectedAnomaly."""
 
+    def test_parses_structured_detection(self, agent):
+        # Arrange: the monitor emitted a well-formed DetectedAnomaly JSON
+        text = json.dumps(
+            {
+                "anomaly_type": "latency_spike",
+                "summary": "Processing latency 2,340ms (threshold 200ms)",
+                "detected_at": "2026-07-09T12:00:00Z",
+                "metric": "processing_latency_ms",
+                "observed_value": "2340",
+                "threshold": "200",
+                "breach_direction": "above",
+                "affected_component": "streamops-processor",
+                "source_signal_ids": ["query_flink_metrics:latency"],
+            }
+        )
+
+        # Act
+        anomaly = agent._parse_detection(text)
+
+        # Assert: typed fields, not a string to re-parse
+        assert anomaly.anomaly_type == "latency_spike"
+        assert anomaly.observed_value == "2340"
+        assert anomaly.source_signal_ids == ["query_flink_metrics:latency"]
+
+    def test_prose_falls_back_to_summary(self, agent):
+        # Arrange: the monitor wrote prose instead of JSON
+        text = "Consumer lag spike detected on partition 3, lag is 450,000 records"
+
+        # Act
+        anomaly = agent._parse_detection(text)
+
+        # Assert: still a typed object, prose preserved in summary, never crashes
+        assert anomaly.anomaly_type == "unknown"
+        assert "450,000" in anomaly.summary
+        assert anomaly.detected_at  # stamped
+
+    @pytest.mark.asyncio
+    async def test_detect_anomalies_returns_typed_anomaly(self, agent):
+        # Arrange: detection concludes with a structured anomaly
+        agent.client = _mock_client(
+            _api_response(
+                json.dumps(
+                    {
+                        "anomaly_type": "backpressure",
+                        "summary": "Backpressure ratio 0.87 on sink-kafka",
+                        "detected_at": "2026-07-09T12:00:00Z",
+                        "affected_component": "sink-kafka",
+                    }
+                )
+            )
+        )
+
+        # Act
+        result = await agent._detect_anomalies()
+
+        # Assert
+        assert result is not None
+        assert result.anomaly_type == "backpressure"
+        assert result.affected_component == "sink-kafka"
+
+    @pytest.mark.asyncio
+    async def test_detect_anomalies_returns_none_when_healthy(self, agent):
+        # Arrange: no anomaly keywords in the response
+        agent.client = _mock_client(
+            _api_response("All systems healthy. Flink job running, everything nominal.")
+        )
+
+        # Act
+        result = await agent._detect_anomalies()
+
+        # Assert
+        assert result is None
+
+
+class TestJsonExtraction:
     def test_extracts_from_code_block(self, agent):
         # Arrange
         text = 'Here is the report:\n```json\n{"key": "value"}\n```\nDone.'
@@ -102,10 +177,9 @@ class TestJsonExtraction:
 
 
 class TestDiagnosisParsing:
-
     def test_valid_json_parses(self, agent):
         # Arrange
-        text = '''```json
+        text = """```json
 {
     "anomaly_type": "latency_spike",
     "detected_at": "2026-06-18T15:00:00Z",
@@ -117,7 +191,7 @@ class TestDiagnosisParsing:
     },
     "tools_used": ["query_flink_jobs"]
 }
-```'''
+```"""
 
         # Act
         result = agent._parse_diagnosis(text)
@@ -141,7 +215,6 @@ class TestDiagnosisParsing:
 
 
 class TestIncidentParsing:
-
     def test_valid_json_parses(self, agent):
         # Arrange
         diagnosis = DiagnosisReport(
@@ -151,7 +224,7 @@ class TestIncidentParsing:
             root_cause={"summary": "test", "confidence": "low", "reasoning": "test"},
             tools_used=[],
         )
-        text = '''{
+        text = """{
     "incident_id": "inc-001",
     "title": "Test incident",
     "severity": "HIGH",
@@ -162,7 +235,7 @@ class TestIncidentParsing:
     "timeline": ["event 1"],
     "recommended_actions": [{"action": "fix", "rationale": "why", "risk": "low", "requires_downtime": false}],
     "monitoring_notes": "watch it"
-}'''
+}"""
 
         # Act
         result = agent._parse_incident(text, diagnosis)
@@ -192,7 +265,6 @@ class TestIncidentParsing:
 
 
 class TestIsRetryable:
-
     def test_timeout_is_retryable(self, agent):
         # Arrange
         exc = anthropic.APITimeoutError(request=None)
@@ -253,7 +325,6 @@ class TestIsRetryable:
 
 
 class TestRetrySubagent:
-
     @pytest.mark.asyncio
     async def test_succeeds_on_first_try(self, agent):
         # Arrange
@@ -323,16 +394,24 @@ class TestRetrySubagent:
 
 
 class TestFallbackReport:
-
     def test_produces_valid_incident_report(self):
         # Arrange
         diagnosis = DiagnosisReport(
             anomaly_type="latency_spike",
             detected_at="2026-06-23T12:00:00Z",
             affected_components=[
-                {"name": "flink-job", "role": "processor", "status": "degraded", "evidence": "p99 > 5s"},
+                {
+                    "name": "flink-job",
+                    "role": "processor",
+                    "status": "degraded",
+                    "evidence": "p99 > 5s",
+                },
             ],
-            root_cause={"summary": "GC pressure on TaskManager", "confidence": "high", "reasoning": "heap at 95%"},
+            root_cause={
+                "summary": "GC pressure on TaskManager",
+                "confidence": "high",
+                "reasoning": "heap at 95%",
+            },
             tools_used=["query_flink_jobs"],
         )
 
@@ -353,7 +432,11 @@ class TestFallbackReport:
             anomaly_type="unknown",
             detected_at="2026-06-23T12:00:00Z",
             affected_components=[],
-            root_cause={"summary": "unclear", "confidence": "low", "reasoning": "insufficient data"},
+            root_cause={
+                "summary": "unclear",
+                "confidence": "low",
+                "reasoning": "insufficient data",
+            },
             tools_used=[],
         )
 
@@ -397,12 +480,16 @@ def _make_diagnosis_with_claims(claim_confidences: list[Confidence]) -> Diagnosi
 
 
 class TestConfidenceDistribution:
-
     def test_logs_distribution(self, agent, caplog):
         # Arrange
-        diagnosis = _make_diagnosis_with_claims([
-            Confidence.HIGH, Confidence.HIGH, Confidence.MEDIUM, Confidence.LOW,
-        ])
+        diagnosis = _make_diagnosis_with_claims(
+            [
+                Confidence.HIGH,
+                Confidence.HIGH,
+                Confidence.MEDIUM,
+                Confidence.LOW,
+            ]
+        )
 
         # Act
         with caplog.at_level("INFO", logger="streamops-mcp.monitor"):
@@ -416,7 +503,6 @@ class TestConfidenceDistribution:
 
 
 class TestAllClaimsLowConfidence:
-
     def test_all_low_returns_true(self):
         # Arrange
         diagnosis = _make_diagnosis_with_claims([Confidence.LOW, Confidence.LOW])
@@ -440,9 +526,13 @@ class TestAllClaimsLowConfidence:
 
     def test_one_medium_returns_false(self):
         # Arrange
-        diagnosis = _make_diagnosis_with_claims([
-            Confidence.LOW, Confidence.MEDIUM, Confidence.UNSOURCED,
-        ])
+        diagnosis = _make_diagnosis_with_claims(
+            [
+                Confidence.LOW,
+                Confidence.MEDIUM,
+                Confidence.UNSOURCED,
+            ]
+        )
 
         # Act / Assert
         assert MonitorAgent._all_claims_low_confidence(diagnosis) is False
@@ -456,12 +546,16 @@ class TestAllClaimsLowConfidence:
 
 
 class TestExtractLowConfidenceClaims:
-
     def test_extracts_low_and_unsourced(self):
         # Arrange
-        diagnosis = _make_diagnosis_with_claims([
-            Confidence.HIGH, Confidence.LOW, Confidence.MEDIUM, Confidence.UNSOURCED,
-        ])
+        diagnosis = _make_diagnosis_with_claims(
+            [
+                Confidence.HIGH,
+                Confidence.LOW,
+                Confidence.MEDIUM,
+                Confidence.UNSOURCED,
+            ]
+        )
 
         # Act
         result = MonitorAgent._extract_low_confidence_claims(diagnosis)
@@ -503,63 +597,95 @@ def _api_response(text: str, stop_reason: str = "end_turn") -> SimpleNamespace:
 def _mock_client(*responses) -> SimpleNamespace:
     """A stand-in Anthropic async client whose messages.create yields the given
     responses (or raises, if a response is an Exception) in order."""
-    return SimpleNamespace(
-        messages=SimpleNamespace(create=AsyncMock(side_effect=list(responses)))
-    )
+    return SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(side_effect=list(responses))))
 
 
-_DIAGNOSIS_JSON = json.dumps({
-    "anomaly_type": "throughput_drop",
-    "detected_at": "2026-07-03T12:00:00Z",
-    "sources": [
-        {"source_id": "src-001", "tool_name": "query_flink_jobs",
-         "retrieved_at": "2026-07-03T12:00:00Z", "raw_output": "{}"},
-    ],
-    "claims": [
-        {"claim_id": "C01", "text": "Consumer lag is 45000 on partition 2",
-         "source_id": "src-001", "confidence": "HIGH"},
-    ],
-    "affected_components": [
-        {"name": "kafka-consumer", "role": "consumer", "status": "degraded",
-         "evidence": "lag 45000"},
-    ],
-    "root_cause": {"summary": "slow downstream sink", "confidence": "high",
-                   "reasoning": "lag climbing steadily", "supporting_metrics": []},
-    "tools_used": ["query_flink_jobs"],
-    "raw_evidence": [],
-})
+_DIAGNOSIS_JSON = json.dumps(
+    {
+        "anomaly_type": "throughput_drop",
+        "detected_at": "2026-07-03T12:00:00Z",
+        "sources": [
+            {
+                "source_id": "src-001",
+                "tool_name": "query_flink_jobs",
+                "retrieved_at": "2026-07-03T12:00:00Z",
+                "raw_output": "{}",
+            },
+        ],
+        "claims": [
+            {
+                "claim_id": "C01",
+                "text": "Consumer lag is 45000 on partition 2",
+                "source_id": "src-001",
+                "confidence": "HIGH",
+            },
+        ],
+        "affected_components": [
+            {
+                "name": "kafka-consumer",
+                "role": "consumer",
+                "status": "degraded",
+                "evidence": "lag 45000",
+            },
+        ],
+        "root_cause": {
+            "summary": "slow downstream sink",
+            "confidence": "high",
+            "reasoning": "lag climbing steadily",
+            "supporting_metrics": [],
+        },
+        "tools_used": ["query_flink_jobs"],
+        "raw_evidence": [],
+    }
+)
 
-_LOW_DIAGNOSIS_JSON = json.dumps({
-    "anomaly_type": "latency_spike",
-    "detected_at": "2026-07-03T12:00:00Z",
-    "sources": [
-        {"source_id": "src-001", "tool_name": "query_prometheus",
-         "retrieved_at": "2026-07-03T12:00:00Z", "raw_output": "{}"},
-    ],
-    "claims": [
-        {"claim_id": "C01", "text": "Possibly elevated latency",
-         "source_id": "src-001", "confidence": "LOW"},
-    ],
-    "affected_components": [],
-    "root_cause": {"summary": "unclear", "confidence": "low",
-                   "reasoning": "single weak signal", "supporting_metrics": []},
-    "tools_used": ["query_prometheus"],
-    "raw_evidence": [],
-})
+_LOW_DIAGNOSIS_JSON = json.dumps(
+    {
+        "anomaly_type": "latency_spike",
+        "detected_at": "2026-07-03T12:00:00Z",
+        "sources": [
+            {
+                "source_id": "src-001",
+                "tool_name": "query_prometheus",
+                "retrieved_at": "2026-07-03T12:00:00Z",
+                "raw_output": "{}",
+            },
+        ],
+        "claims": [
+            {
+                "claim_id": "C01",
+                "text": "Possibly elevated latency",
+                "source_id": "src-001",
+                "confidence": "LOW",
+            },
+        ],
+        "affected_components": [],
+        "root_cause": {
+            "summary": "unclear",
+            "confidence": "low",
+            "reasoning": "single weak signal",
+            "supporting_metrics": [],
+        },
+        "tools_used": ["query_prometheus"],
+        "raw_evidence": [],
+    }
+)
 
-_REPORT_JSON = json.dumps({
-    "incident_id": "inc-001",
-    "title": "Consumer lag spike on partition 2",
-    "severity": "LOW",
-    "summary": "Consumer lag elevated but within recoverable range.",
-    "anomaly_type": "throughput_drop",
-    "root_cause": "slow downstream sink",
-    "affected_components": ["kafka-consumer"],
-    "timeline": ["Lag began climbing at 12:00"],
-    "recommended_actions": [],
-    "monitoring_notes": "Watch consumer lag over the next 15 minutes.",
-    "requires_human_approval": False,
-})
+_REPORT_JSON = json.dumps(
+    {
+        "incident_id": "inc-001",
+        "title": "Consumer lag spike on partition 2",
+        "severity": "LOW",
+        "summary": "Consumer lag elevated but within recoverable range.",
+        "anomaly_type": "throughput_drop",
+        "root_cause": "slow downstream sink",
+        "affected_components": ["kafka-consumer"],
+        "timeline": ["Lag began climbing at 12:00"],
+        "recommended_actions": [],
+        "monitoring_notes": "Watch consumer lag over the next 15 minutes.",
+        "requires_human_approval": False,
+    }
+)
 
 
 class TestRunCycleOrchestration:
@@ -580,7 +706,8 @@ class TestRunCycleOrchestration:
 
         # Act
         with patch(
-            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+            "streamops_mcp.agent.monitor.escalate",
+            new_callable=AsyncMock,
         ) as mock_escalate:
             result = await agent.run_cycle()
 
@@ -600,7 +727,8 @@ class TestRunCycleOrchestration:
 
         # Act
         with patch(
-            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+            "streamops_mcp.agent.monitor.escalate",
+            new_callable=AsyncMock,
         ) as mock_escalate:
             result = await agent.run_cycle()
 
@@ -619,7 +747,8 @@ class TestRunCycleOrchestration:
 
         # Act
         with patch(
-            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+            "streamops_mcp.agent.monitor.escalate",
+            new_callable=AsyncMock,
         ) as mock_escalate:
             result = await agent.run_cycle()
 
@@ -641,7 +770,8 @@ class TestRunCycleOrchestration:
 
         # Act
         with patch(
-            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+            "streamops_mcp.agent.monitor.escalate",
+            new_callable=AsyncMock,
         ) as mock_escalate:
             result = await agent.run_cycle()
 
@@ -662,7 +792,8 @@ class TestRunCycleOrchestration:
 
         # Act
         with patch(
-            "streamops_mcp.agent.monitor.escalate", new_callable=AsyncMock,
+            "streamops_mcp.agent.monitor.escalate",
+            new_callable=AsyncMock,
         ) as mock_escalate:
             result = await agent.run_cycle()
 
@@ -687,7 +818,8 @@ class TestRunCycleOrchestration:
 
         # Act
         with patch(
-            "streamops_mcp.agent.monitor.escalate", new=_capture,
+            "streamops_mcp.agent.monitor.escalate",
+            new=_capture,
         ):
             await agent.run_cycle()
 
